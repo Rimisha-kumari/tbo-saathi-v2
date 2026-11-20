@@ -201,4 +201,6 @@ export interface ChatResponse {
   prefs: Preference[];
   tools: ToolTrace[];
   provider: "anthropic" | "openai" | "demo";
+  /** set when a configured LLM failed and the Smart Demo Agent answered instead */
+  fallbackReason?: string;
 }

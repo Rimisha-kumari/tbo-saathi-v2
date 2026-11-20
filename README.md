@@ -29,7 +29,18 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
   - `thinking`: a shimmer across the character plus orbiting dots
   - `speaking`: the jaw and mouth open in sync with the speech level, with head cadence and vocal pulse bars
   - `concerned`: a red alert aura, a lean and a softened smile
-- **Lip-sync** (`src/lib/speech/useVoice.ts`). The mouth follows real audio loudness when cloud TTS is playing. With browser speech, it follows word-boundary events and a syllable rhythm. If no voice exists for the language, the mouth is timed to the text instead.
+- **Lip-sync** (`src/lib/speech/visemes.ts`, `src/lib/speech/useVoice.ts`). Each reply is turned into a timeline of mouth shapes, one per vowel or consonant, for Latin and the Devanagari, Bengali, Tamil and Telugu scripts. Vowels set how far the mouth opens and whether the lips spread (e/i) or round (o/u). Bilabials (p/b/m) close it. Commas and full stops add pauses, and stressed syllables trigger small head nods.
+  - With browser speech, the timeline is re-synced on every word-`boundary` event and learns each voice's real speed after the first sentence.
+  - With cloud TTS, the timeline is stretched to the audio length and opens only as wide as the actual loudness allows.
+  - Easing is faster opening than closing, and neighbouring sounds blend into each other, so the mouth doesn't bounce mechanically.
+- **Micro-expressions** (`src/components/avatar/motion.ts`). Each state has its own head tilt, pitch, breathing rate and depth, small idle drift and blink cadence. Occasional double blinks and blinks during speech pauses are included.
+  - While listening, Saathi gives small "mm-hm" nods.
+  - When concerned, breathing turns to slower, deeper sighs, a pulsing alert frame appears and an "I'm on it" badge shows.
+- **Microphone** (`useVoice().listen`).
+  - Asks for mic permission explicitly and recognises speech in the selected language (`en-IN`, `hi-IN`, `ta-IN`, `te-IN` or `bn-IN`; Hinglish uses `en-IN`).
+  - Shows the live transcript as you speak. With **Auto** on, the message sends itself when you stop talking. With Auto off, the transcript goes into the input box for you to review.
+  - Permission denied, no microphone, no speech, network problems and unsupported browsers each show a status message that clears on its own.
+  - Watchdogs end the session if recognition hasn't started after 5 s, if nothing is heard for 8 s, or after 20 s in total. If the speech engine stops responding, the app resets the mic itself, so it can never get stuck listening.
 - **Languages.** English, Hindi (`hi-IN`), Hinglish, Tamil (`ta-IN`), Telugu (`te-IN`) and Bengali (`bn-IN`) are supported in the UI, the agent replies, speech recognition and speech output.
   - The reply language follows the script the user types in.
   - Voice status is known as soon as the page loads; it never shows "checking…".
@@ -56,10 +67,13 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
 
 | Variable | What it enables |
 | --- | --- |
-| `ANTHROPIC_API_KEY` (`ANTHROPIC_MODEL`, default `claude-opus-5-5`) | Claude runs the agent loop using the same tools. It's called through the Anthropic SDK with server-side refusal fallback turned on. |
+| `ANTHROPIC_API_KEY` (`ANTHROPIC_MODEL`; leave it unset for the default `claude-opus-5-5`) | Claude runs the agent loop using the same tools. It's called through the Anthropic SDK with server-side refusal fallback turned on. |
 | `OPENAI_API_KEY` (`OPENAI_MODEL`) | An alternative LLM agent. It also supplies cloud TTS and STT if Sarvam isn't set. |
 | `SARVAM_API_KEY` (`SARVAM_TTS_SPEAKER`) | Indian-language TTS (`bulbul`) and STT (`saarika`). |
-| `BHASHINI_INFERENCE_URL`, `BHASHINI_INFERENCE_KEY`, `BHASHINI_TTS_SERVICE_ID` (+ `BHASHINI_USER_ID`, `BHASHINI_API_KEY`) | TTS through the Bhashini ULCA pipeline. |
+| `BHASHINI_USER_ID` + `BHASHINI_API_KEY` (looks up the endpoint automatically), **or** `BHASHINI_INFERENCE_URL` + `BHASHINI_INFERENCE_KEY` + `BHASHINI_TTS_SERVICE_ID` | TTS through the Bhashini ULCA pipeline. |
+| `PROVIDER_TIMEOUT_MS` | How long to wait for an external provider before falling back (default 25000). |
+
+Empty values and placeholders such as `your-key-here` count as "not configured". Keys are only ever read on the server. `GET /api/chat` and `GET /api/speech` report which providers are configured, without revealing any key values. When a configured LLM fails, the reply carries a `fallbackReason` and the header badge changes to "Demo fallback".
 
 The providers are tried in this order:
 

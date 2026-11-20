@@ -4,18 +4,13 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { cityName } from "@/data/cities";
+import { config, ProviderError, type LLMProvider } from "@/lib/config";
 import { costOf } from "@/lib/travel/engine";
 import { LANGS } from "@/lib/i18n";
 import type { ChatTurn } from "@/lib/types";
 import { runTool, TOOL_DEFS, type ToolContext } from "./tools";
 
 const MAX_STEPS = 6;
-
-export function llmProvider(): "anthropic" | "openai" | null {
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
-  if (process.env.OPENAI_API_KEY) return "openai";
-  return null;
-}
 
 function systemPrompt(ctx: ToolContext) {
   const lang = LANGS.find((l) => l.id === ctx.lang)!;
@@ -45,7 +40,9 @@ function systemPrompt(ctx: ToolContext) {
 /* ─────────────────────────── Anthropic (Claude) ─────────────────────────── */
 
 async function runAnthropic(history: ChatTurn[], ctx: ToolContext): Promise<string> {
-  const client = new Anthropic();
+  const cfg = config.anthropic();
+  if (!cfg) throw new ProviderError("ANTHROPIC_API_KEY not configured");
+  const client = new Anthropic({ apiKey: cfg.apiKey, timeout: config.timeoutMs(), maxRetries: 1 });
   const tools: Anthropic.Beta.BetaTool[] = TOOL_DEFS.map((t) => ({
     name: t.name,
     description: t.description,
@@ -56,7 +53,7 @@ async function runAnthropic(history: ChatTurn[], ctx: ToolContext): Promise<stri
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const response = await client.beta.messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-opus-5-5",
+      model: cfg.model,
       max_tokens: 16000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
@@ -98,6 +95,8 @@ interface OAIMessage {
 }
 
 async function runOpenAI(history: ChatTurn[], ctx: ToolContext): Promise<string> {
+  const cfg = config.openai();
+  if (!cfg) throw new ProviderError("OPENAI_API_KEY not configured");
   const messages: OAIMessage[] = [
     { role: "system", content: systemPrompt(ctx) },
     ...history.slice(-12).map((m) => ({ role: m.role, content: m.text }) as OAIMessage),
@@ -106,10 +105,11 @@ async function runOpenAI(history: ChatTurn[], ctx: ToolContext): Promise<string>
   for (let step = 0; step < MAX_STEPS; step++) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      body: JSON.stringify({ model: process.env.OPENAI_MODEL || "gpt-4o-mini", messages, tools, tool_choice: "auto" }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({ model: cfg.model, messages, tools, tool_choice: "auto" }),
+      signal: AbortSignal.timeout(config.timeoutMs()),
     });
-    if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+    if (!res.ok) throw new ProviderError(`OpenAI HTTP ${res.status}`, res.status);
     const data = (await res.json()) as { choices: { message: OAIMessage }[] };
     const msg = data.choices[0].message;
     if (!msg.tool_calls?.length) return (msg.content ?? "").trim();
@@ -127,6 +127,6 @@ async function runOpenAI(history: ChatTurn[], ctx: ToolContext): Promise<string>
   throw new Error("Tool loop exceeded");
 }
 
-export async function runLLMAgent(provider: "anthropic" | "openai", history: ChatTurn[], ctx: ToolContext) {
+export async function runLLMAgent(provider: LLMProvider, history: ChatTurn[], ctx: ToolContext) {
   return provider === "anthropic" ? runAnthropic(history, ctx) : runOpenAI(history, ctx);
 }

@@ -20,7 +20,10 @@ export default function SaathiApp() {
   const [s, dispatch] = useReducer(reducer, initialState);
   const voice = useVoice();
   const [doc, setDoc] = useState<DocSpec | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [autoSend, setAutoSend] = useState(true);
+  const [injected, setInjected] = useState<{ id: number; text: string } | null>(null);
+  const autoSendRef = useRef(autoSend);
+  autoSendRef.current = autoSend;
   const stateRef = useRef(s);
   stateRef.current = s;
 
@@ -64,7 +67,7 @@ export default function SaathiApp() {
         const data = (await res.json()) as ChatResponse;
         dispatch({ type: "prefs", prefs: data.prefs });
         dispatch({ type: "effects", effects: data.effects });
-        dispatch({ type: "provider", provider: data.provider });
+        dispatch({ type: "provider", provider: data.fallbackReason ? `fallback:${data.fallbackReason}` : data.provider });
         say(data.reply, data.lang, data.tools);
       } catch {
         say("Sorry – I couldn't reach the travel engine. Please try again.", c.lang);
@@ -107,19 +110,44 @@ export default function SaathiApp() {
     void travel({ action: "dismiss", pending: p });
   };
 
+  /* Remember the auto-send preference per browser (best effort). */
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("saathi.autoSend");
+      if (v !== null) setAutoSend(v === "1");
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  const changeAutoSend = (v: boolean) => {
+    setAutoSend(v);
+    try {
+      localStorage.setItem("saathi.autoSend", v ? "1" : "0");
+    } catch {
+      /* storage unavailable */
+    }
+  };
+
+  /* Mic errors are non-blocking: they fade out on their own. */
+  const { clearMic } = voice;
+  useEffect(() => {
+    if (voice.mic.status !== "error" && voice.mic.status !== "unsupported") return;
+    const id = window.setTimeout(clearMic, 7000);
+    return () => window.clearTimeout(id);
+  }, [voice.mic, clearMic]);
+
   const mic = () => {
     if (voice.listening) {
       voice.stopListening();
       return;
     }
-    voice.listen(
-      speechCode(stateRef.current.lang === "hinglish" ? "hi" : stateRef.current.lang),
-      (text) => void send(text),
-      (msg) => {
-        setNotice(msg);
-        setTimeout(() => setNotice(null), 4000);
+    void voice.listen({
+      lang: speechCode(stateRef.current.lang),
+      onFinal: (text) => {
+        if (autoSendRef.current) void send(text);
+        else setInjected({ id: Date.now(), text });
       },
-    );
+    });
   };
 
   const cmd = (k: keyof typeof COMMANDS) => () => void send(COMMANDS[k][stateRef.current.lang]);
@@ -177,7 +205,7 @@ export default function SaathiApp() {
         {/* Avatar column */}
         <section className="flex h-[420px] min-h-0 flex-col gap-2 lg:h-auto">
           <div className="min-h-0 flex-1">
-            <AvatarStage state={avatarState} levelRef={voice.levelRef} stateLabel={stateLabel} />
+            <AvatarStage state={avatarState} mouthRef={voice.mouthRef} stateLabel={stateLabel} />
           </div>
           <div className="glass flex items-center gap-2 rounded-2xl px-3 py-2">
             <div className="min-w-0 flex-1">
@@ -212,6 +240,11 @@ export default function SaathiApp() {
             busy={s.busy}
             listening={voice.listening}
             interim={voice.interim}
+            mic={voice.mic}
+            autoSend={autoSend}
+            injected={injected}
+            onAutoSend={changeAutoSend}
+            onDismissMic={voice.clearMic}
             chips={chips}
             onSend={(x) => void send(x)}
             onMic={mic}
@@ -220,7 +253,6 @@ export default function SaathiApp() {
             onRemovePref={(k) => dispatch({ type: "removePref", key: k })}
             onReplay={(x) => void voice.speak(x, langCode)}
           />
-          {notice && <div className="absolute inset-x-3 top-12 z-10 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-[12px] text-amber-100 backdrop-blur-md">{notice}</div>}
         </div>
 
         {/* Workspace column */}

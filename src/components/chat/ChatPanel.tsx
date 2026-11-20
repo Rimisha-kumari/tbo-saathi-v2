@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "@/lib/i18n";
 import type { UIMessage } from "@/lib/store";
+import type { MicState } from "@/lib/speech/useVoice";
 import type { Lang, PendingAction, Preference } from "@/lib/types";
 import ConfirmGate from "./ConfirmGate";
 import MemoryBar from "./MemoryBar";
@@ -23,6 +24,12 @@ interface Props {
   busy: boolean;
   listening: boolean;
   interim: string;
+  mic: MicState;
+  autoSend: boolean;
+  /** a voice transcript to place in the input for review (manual-send mode) */
+  injected: { id: number; text: string } | null;
+  onAutoSend: (v: boolean) => void;
+  onDismissMic: () => void;
   chips: DemoChip[];
   onSend: (text: string) => void;
   onMic: () => void;
@@ -41,6 +48,10 @@ const TONE: Record<NonNullable<DemoChip["tone"]>, string> = {
 export default function ChatPanel(p: Props) {
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (p.injected) setDraft(p.injected.text);
+  }, [p.injected]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -118,6 +129,28 @@ export default function ChatPanel(p: Props) {
         ))}
       </div>
 
+      {(p.mic.status !== "idle" || p.interim) && (
+        <div
+          className={`mx-3 mb-2 flex items-center gap-2 rounded-xl border px-3 py-1.5 text-[12px] ${
+            p.mic.status === "error" || p.mic.status === "unsupported"
+              ? "border-amber-400/30 bg-amber-500/10 text-amber-100"
+              : "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          <span aria-hidden>{p.mic.status === "error" || p.mic.status === "unsupported" ? "⚠️" : p.mic.status === "processing" ? "⏳" : "🎙️"}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {p.interim ? <span className="italic text-white">“{p.interim}”</span> : p.mic.message}
+          </span>
+          {(p.mic.status === "error" || p.mic.status === "unsupported") && (
+            <button type="button" onClick={p.onDismissMic} className="shrink-0 text-white/50 hover:text-white" aria-label="Dismiss">
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -136,13 +169,17 @@ export default function ChatPanel(p: Props) {
           {p.listening && <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400/40" />}
         </button>
         <input
-          value={p.listening ? p.interim || t(p.lang, "listening") : draft}
+          value={p.listening ? p.interim : draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={t(p.lang, "placeholder")}
+          placeholder={p.listening ? t(p.lang, "listening") : t(p.lang, "placeholder")}
           readOnly={p.listening}
           className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-[13px] text-white placeholder:text-white/35 outline-none focus:border-orange-400/60"
           aria-label="Message"
         />
+        <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[10.5px] text-white/50" title="Send voice messages automatically when you stop talking">
+          <input type="checkbox" checked={p.autoSend} onChange={(e) => p.onAutoSend(e.target.checked)} className="accent-orange-500" />
+          Auto
+        </label>
         <button
           type="submit"
           disabled={p.busy || !draft.trim()}

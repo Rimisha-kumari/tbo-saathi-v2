@@ -35,9 +35,15 @@ export default function Header({ lang, mode, markupPct, provider, voiceLabel, vo
         >
           🎙️ {voiceLabel}
         </span>
-        <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/70 lg:inline" title="Which brain is answering">
-          🤖 {provider === "anthropic" ? "Claude" : provider === "openai" ? "OpenAI" : "Smart Demo Agent"}
-        </span>
+        {provider.startsWith("fallback:") ? (
+          <span className="hidden rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-100 lg:inline" title={`LLM unavailable (${provider.slice(9)}) – the Smart Demo Agent answered`}>
+            ⚠️ Demo fallback
+          </span>
+        ) : (
+          <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/70 lg:inline" title="Which brain is answering">
+            🤖 {provider === "anthropic" ? "Claude" : provider === "openai" ? "OpenAI" : "Smart Demo Agent"}
+          </span>
+        )}
 
         <label className="sr-only" htmlFor="lang">Language</label>
         <select
