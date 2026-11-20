@@ -6,6 +6,8 @@ import {
 } from "@/lib/travel/engine";
 import { forecast } from "@/data/weather";
 import { destinationNames, findDestinations, getDestination } from "@/data/destinations";
+import { findPlaces, PLACES } from "@/data/world/places";
+import { registerFreeform } from "@/lib/travel/universal";
 import type { Booking, CompareSet, Effect, Lang, Mode, PendingAction, Preference, Strategy, ToolTrace, TripPlan } from "@/lib/types";
 import { P } from "./phrases";
 
@@ -41,7 +43,8 @@ const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : typeof v
 const regionArg = (v: unknown) => {
   const s = str(v);
   if (!s) return undefined;
-  return getDestination(s.toLowerCase())?.id ?? getDestination(s.toUpperCase())?.id ?? findDestinations(s)[0]?.dest.id;
+  const p = findPlaces(s)[0]?.place;
+  return getDestination(s.toLowerCase())?.id ?? getDestination(s.toUpperCase())?.id ?? findDestinations(s)[0]?.dest.id ?? (p ? `g-${p.id}` : undefined);
 };
 
 const cityArg = (v: unknown) => {
@@ -94,23 +97,26 @@ export const TOOLS: Record<string, (args: Args, ctx: ToolContext) => unknown> = 
   },
 
   updateItinerary(args, ctx) {
-    const region = regionArg(args.destination);
+    let region = regionArg(args.destination) ?? regionArg(args.destinationName);
+    // Universal fallback: any other named place gets a generated destination (flights via nearestAirport if given).
+    const named = str(args.destinationName) ?? str(args.destination);
+    if (!region && named && !cityArg(args.destination)) region = registerFreeform(named, cityArg(args.nearestAirport)).id;
     const destination = region ? getDestination(region)!.gateway : cityArg(args.destination) ?? cityArg(args.nearestAirport);
     const strategy = (["cheapest", "balanced", "premium"] as Strategy[]).find((s) => s === args.strategy);
     const focus = [str(args.focus), Array.isArray(args.mustSee) ? args.mustSee.join(", ") : undefined].filter(Boolean).join(" ") || undefined;
     const replan =
-      !ctx.trip || destination || cityArg(args.origin) || str(args.startDate) || num(args.nights) || num(args.travellers) || num(args.budget) || focus || strategy === "premium" || strategy === "balanced";
+      !ctx.trip || region || destination || cityArg(args.origin) || str(args.startDate) || num(args.nights) || num(args.travellers) || num(args.budget) || focus || strategy === "premium" || strategy === "balanced";
     let trip = ctx.trip;
     if (strategy === "cheapest" && trip && !destination) {
       trip = makeCheaper(trip, ctx.prefs).trip;
     } else if (replan) {
-      const dest = destination ?? trip?.destination;
-      if (!dest) return { error: "destination required – pass a supported destination, or destinationName + nearestAirport + customDays for any other place" };
-      const sameDest = !destination || destination === trip?.destination;
+      const dest = destination ?? (region ? "" : trip?.destination);
+      if (!dest && !region && !trip?.region) return { error: "destination required – pass a supported destination, or destinationName + nearestAirport + customDays for any other place" };
+      const sameDest = !region && (!destination || destination === trip?.destination);
       trip = planTrip(
         {
           origin: cityArg(args.origin) ?? trip?.origin,
-          destination: dest,
+          destination: dest ?? "",
           region: region ?? (sameDest ? trip?.region : undefined),
           focus: focus ?? (sameDest ? trip?.focus : undefined),
           startDate: str(args.startDate) ?? trip?.startDate,
@@ -145,16 +151,16 @@ export const TOOLS: Record<string, (args: Args, ctx: ToolContext) => unknown> = 
   getDestinationGuide(args) {
     const region = regionArg(args.place);
     const d = getDestination(region);
-    if (!d) return { known: false, note: "No curated data for this place. Plan it yourself: call updateItinerary with destinationName, nearestAirport (one of the supported IATA codes), nights, and customDays containing specific, real local stops with realistic times and INR costs." , supportedDestinations: destinationNames() };
+    if (!d) return { known: false, note: "No data for this place. Plan it yourself: call updateItinerary with destinationName, nearestAirport (a supported IATA code), nights, and customDays containing specific, real local stops with realistic times and INR costs.", curated: destinationNames(), gazetteer: PLACES.map((p) => p.name) };
     return {
-      known: true, id: d.id, name: d.name, gateway: d.gateway, gatewayNote: d.gatewayNote, bestTime: d.bestTime, food: d.food, tips: d.tips,
+      known: true, curated: !d.generated, id: d.id, name: d.name, gateway: d.gateway, entry: d.entry, currency: d.currency, gatewayNote: d.gatewayNote, bestTime: d.bestTime, food: d.food, tips: d.tips,
       bases: d.bases.map((b) => ({ id: b.id, name: b.name, hotels: b.hotels.map((h) => `${h.name} (${h.stars}★, ₹${h.price})`) })),
       routeDays: d.route.flatMap((g) => g.days.map((day) => `${day.title} [${day.base}${g.minNights ? `, needs ${g.minNights}+ nights` : ""}]`)),
     };
   },
 
   bookTrip(_args, ctx) {
-    if (!ctx.trip?.flight || !ctx.trip.hotel) return { error: "No complete trip to book yet." };
+    if (!ctx.trip?.hotel) return { error: "No complete trip to book yet." };
     const t = ctx.trip;
     const cost = costOf(t);
     const price = ctx.mode === "b2b" ? Math.round(cost.total * (1 + ctx.markupPct / 100)) : cost.total;
@@ -162,8 +168,9 @@ export const TOOLS: Record<string, (args: Args, ctx: ToolContext) => unknown> = 
       id: uid("P"), kind: "book", title: `Book ${cityName(t.destination)} trip`, amount: price,
       lines: [
         `${t.travellers} traveller(s) · ${t.startDate} → ${addDays(t.startDate, t.nights)} (${t.nights}N)`,
-        `✈ ${flightLabel(t.flight!)}`,
+        t.flight ? `✈ ${flightLabel(t.flight)}` : "✈ Flights not included (no airport confirmed)",
         t.returnFlight ? `✈ ${flightLabel(t.returnFlight)}` : "",
+        t.requests?.length ? `💺 Requests: ${t.requests.join(", ")}` : "",
         `🏨 ${t.hotel!.name} · ${t.rooms} room(s) · ${t.hotel!.freeCancellation ? "free cancellation" : "non-refundable"}`,
         `🚗 Airport transfers · 🎟 ${t.activities.length} experiences`,
       ].filter(Boolean),
@@ -176,6 +183,7 @@ export const TOOLS: Record<string, (args: Args, ctx: ToolContext) => unknown> = 
   handleDisruption(args, ctx) {
     const b = activeBooking(ctx, str(args.bookingRef));
     if (!b) return { error: "No active booking to protect." };
+    if (!b.trip.flight) return { error: "This booking has no flights to protect." };
     const r = findRecovery(b);
     setPending(ctx, {
       id: uid("P"), kind: "rebook", title: `Rebook ${b.ref} after cancellation`, amount: 0,

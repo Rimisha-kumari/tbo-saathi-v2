@@ -1,21 +1,36 @@
 import { DEOGHAR_DEST, JHARKHAND } from "./jharkhand";
 import { AGRA, AMRITSAR, DELHI, GOA, JAIPUR, KHAJURAHO, LEH, MANALI, MUMBAI, RISHIKESH, SRINAGAR, UDAIPUR, VARANASI } from "./north-west";
 import { ANDAMAN, BENGALURU, CHENNAI, COORG, DARJEELING, GANGTOK, HAMPI, HYDERABAD, KERALA, KOLKATA, OOTY, PURI, SHILLONG } from "./south-east";
+import { BIHAR } from "./bihar";
+import { BALI, BANGKOK, DUBAI, LONDON, PARIS, SINGAPORE, TOKYO } from "./international";
+import { generatedDestination } from "@/lib/travel/universal";
+import { PLACES } from "@/data/world/places";
 import type { Base, Destination } from "./types";
 
 export type { Base, DayTemplate, Destination, HotelSpec, RouteGroup, StopSpec } from "./types";
 
 export const DESTINATIONS: Destination[] = [
-  JHARKHAND, DEOGHAR_DEST, GOA, JAIPUR, UDAIPUR, MANALI, VARANASI, AGRA, DELHI, MUMBAI, AMRITSAR, RISHIKESH, LEH, SRINAGAR, KHAJURAHO,
+  JHARKHAND, DEOGHAR_DEST, BIHAR, SINGAPORE, DUBAI, BANGKOK, BALI, TOKYO, LONDON, PARIS, GOA, JAIPUR, UDAIPUR, MANALI, VARANASI, AGRA, DELHI, MUMBAI, AMRITSAR, RISHIKESH, LEH, SRINAGAR, KHAJURAHO,
   KERALA, BENGALURU, CHENNAI, HYDERABAD, KOLKATA, DARJEELING, GANGTOK, SHILLONG, PURI, ANDAMAN, OOTY, COORG, HAMPI,
 ];
 
 const BY_ID = new Map(DESTINATIONS.map((d) => [d.id, d]));
 
-/** Look up by destination id, or by gateway airport code (first match). */
+/**
+ * Look up by curated destination id, gateway airport code (first match), or a generated id from the
+ * Universal Destination Generator ("g-<place>" for gazetteer places, "u-<slug>" for free-form names).
+ */
 export function getDestination(key?: string | null): Destination | undefined {
   if (!key) return undefined;
-  return BY_ID.get(key) ?? DESTINATIONS.find((d) => d.gateway === key);
+  return (
+    BY_ID.get(key) ??
+    (/^[gu]-/.test(key) ? generatedDestination(key) : undefined) ??
+    DESTINATIONS.find((d) => d.gateway === key) ??
+    (() => {
+      const p = PLACES.find((pl) => pl.airport === key);
+      return p ? generatedDestination(`g-${p.id}`) : undefined;
+    })()
+  );
 }
 
 export function getBase(dest: Destination, baseId?: string): Base {

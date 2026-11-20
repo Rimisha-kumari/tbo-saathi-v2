@@ -45,7 +45,8 @@ export function searchFlights(from: string, to: string, date: string, prefs: Pre
 
 function flightScore(f: Flight, prefs: Preference[], strategy: Strategy) {
   if (strategy === "cheapest") return f.price + f.stops * 150;
-  let s = f.price + f.durationMin * 6 + f.stops * 1400;
+  // connections hurt more on international routes (long layovers, transit rules)
+  let s = f.price + f.durationMin * 6 + f.stops * (f.price > 12000 ? 4500 : 1400);
   if (has(prefs, "morning")) s += f.depart < "12:00" && f.depart >= "06:00" ? -900 : 700;
   if (has(prefs, "veg") || has(prefs, "jain")) s += f.meal === "paid" ? 250 : -150;
   if (f.depart < "06:00" || f.depart > "21:00") s += 600; // red-eye penalty
@@ -104,7 +105,8 @@ export function costOf(trip: TripPlan): CostBreakdown {
   if (trip.days.length && (trip.dayPlan || trip.region)) {
     const items = trip.days.flatMap((d) => d.items);
     transfers = items.filter((i) => i.kind === "transfer").reduce((sum, i) => sum + (i.price ?? 0), 0);
-    activities = items.filter((i) => i.kind === "activity" || i.kind === "meal").reduce((sum, i) => sum + (i.price ?? 0), 0);
+    // tours, meals, and fees (visa/entry, park levies) shown as priced notes
+    activities = items.filter((i) => i.kind === "activity" || i.kind === "meal" || (i.kind === "note" && i.price)).reduce((sum, i) => sum + (i.price ?? 0), 0);
   } else {
     transfers = trip.transfers.reduce((sum, t) => sum + t.price, 0);
     activities = trip.activities.reduce((sum, a) => sum + (a.perGroup ? a.price : a.price * trip.travellers), 0);
@@ -135,7 +137,10 @@ const round50 = (n: number) => Math.round(n / 50) * 50;
 
 function airportTransfers(dest: Destination, lastBase: Base, travellers: number): Transfer[] {
   const big = travellers > 3;
-  const vehicle = travellers > 6 ? "Tempo traveller (12-seater)" : big ? "Private SUV (Innova Crysta)" : "Private sedan (Dzire / Etios)";
+  const abroad = (CITIES[dest.gateway]?.country ?? "IN") !== "IN";
+  const vehicle = abroad
+    ? travellers > 6 ? "Private minibus transfer" : big ? "Private van transfer" : "Private car transfer"
+    : travellers > 6 ? "Tempo traveller (12-seater)" : big ? "Private SUV (Innova Crysta)" : "Private sedan (Dzire / Etios)";
   const rate = (travellers > 6 ? 1.6 : 1) * (big ? dest.airportTransfer.suv : dest.airportTransfer.sedan);
   const outMinutes = lastBase.airport ? lastBase.airportMinutes ?? 25 : lastBase.airportMinutes ?? dest.airportTransfer.minutes;
   return [
@@ -155,8 +160,14 @@ export function planTrip(input: PlanInput, prefs: Preference[]): TripPlan {
   const budget = input.budget ?? 0;
   const rooms = Math.ceil(travellers / 2);
 
-  const trip: TripPlan = { origin, destination, startDate, nights, travellers, rooms, budget, strategy, transfers: [], activities: [], days: [] };
+  const requests = [
+    has(prefs, "window") && "window seat",
+    has(prefs, "aisle") && "aisle seat",
+    has(prefs, "jain") ? "Jain meal (VJML)" : has(prefs, "veg") && "veg meal (VGML)",
+  ].filter((x): x is string => !!x);
+  const trip: TripPlan = { origin, destination, startDate, nights, travellers, rooms, budget, strategy, transfers: [], activities: [], days: [], requests };
   let returnFrom = destination;
+  if (dest && !dest.gateway) returnFrom = "";
   if (dest) {
     const p = planDestination(dest, startDate, nights, travellers, prefs, strategy, input.focus);
     Object.assign(trip, { focus: input.focus, region: dest.id, regionName: dest.name, dayPlan: p.dayPlan, arrivalStops: p.arrivalStops, departureStops: p.departureStops });
@@ -171,8 +182,10 @@ export function planTrip(input: PlanInput, prefs: Preference[]): TripPlan {
   const byScore = (l: Flight[], extra: (f: Flight) => number = () => 0) =>
     [...filt(l)].sort((a, b) => flightScore(a, prefs, strategy) + extra(a) - (flightScore(b, prefs, strategy) + extra(b)));
   // Land early enough to use the first evening; on the way back prefer afternoon departures.
-  trip.flight = byScore(flightInventory(origin, destination, startDate), (f) => (strategy === "cheapest" ? 0 : f.arrive > "17:30" ? 500 : 0))[0];
-  trip.returnFlight = byScore(flightInventory(returnFrom, origin, addDays(startDate, nights)), (f) => (strategy === "cheapest" ? 0 : f.depart >= "13:00" ? -600 : 400))[0];
+  // Land early enough to use the first evening; avoid overnight arrivals unless nothing else exists.
+  trip.flight = byScore(flightInventory(origin, destination, startDate), (f) => (f.nextDay ? (strategy === "cheapest" ? 6000 : 20000) : 0) + (strategy === "cheapest" ? 0 : f.arrive > "17:30" ? 500 : 0))[0];
+  // Return: avoid pre-dawn departures (a 03:00 checkout wastes the last night) and prefer afternoons.
+  trip.returnFlight = byScore(flightInventory(returnFrom, origin, addDays(startDate, nights)), (f) => (f.depart < "08:00" ? (strategy === "cheapest" ? 1500 : 6000) : 0) + (strategy === "cheapest" ? 0 : f.depart >= "13:00" ? -600 : 400))[0];
 
   // Hotels: allowance per room-night = what the budget leaves after everything else.
   trip.days = buildDays(trip);
@@ -269,7 +282,7 @@ function vouchersFor(trip: TripPlan): Voucher[] {
     if (!f) continue;
     v.push({
       id: uid("V"), kind: "flight", title: `${f.airline} ${f.flightNo} · ${f.from} → ${f.to}`, code: `PNR ${code()}`,
-      lines: [`${f.date} · ${f.depart} → ${f.arrive}`, `${trip.travellers} traveller(s) · ${f.fareType} fare · ${f.baggage} check-in`, f.meal === "veg-included" ? "Veg meal included" : "Meal: pre-book on web check-in"],
+      lines: [`${f.date} · ${f.depart} → ${f.arrive}${f.nextDay ? " (+1 day)" : ""} local`, `${trip.travellers} traveller(s) · ${f.fareType} fare · ${f.baggage} check-in`, f.meal === "veg-included" ? "Veg meal included" : "Meal: pre-book on web check-in", ...(trip.requests?.length ? [`Requested: ${trip.requests.join(", ")}`] : [])],
     });
   }
   const stays = trip.stays?.length ? trip.stays : trip.hotel ? [{ base: "main", baseName: city, hotel: trip.hotel, nights: trip.nights }] : [];

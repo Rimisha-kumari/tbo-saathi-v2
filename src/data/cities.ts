@@ -1,4 +1,5 @@
 import type { City } from "@/lib/types";
+import { EXTRA_AIRPORTS } from "./world/airports";
 
 export const CITIES: Record<string, City> = {
   DEL: {
@@ -165,6 +166,9 @@ export const CITIES: Record<string, City> = {
   },
 };
 
+
+// Extra Indian and international gateways (existing entries keep priority).
+for (const [code, city] of Object.entries(EXTRA_AIRPORTS)) if (!CITIES[code]) CITIES[code] = city;
 
 export function cityName(code: string, lang: string = "en"): string {
   const c = CITIES[code];

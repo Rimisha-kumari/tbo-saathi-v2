@@ -19,6 +19,9 @@ export interface DayLite {
   base?: string; // defaults to the primary base
   group?: string; // consecutive days sharing a group are kept together
   minNights?: number;
+  priority?: number; // defaults to the day's position
+  keywords?: string[]; // match words when the user names this part of the route
+
 }
 
 export interface DestLite {
@@ -39,6 +42,9 @@ export interface DestLite {
   bestTime: string;
   food: string[];
   tips?: string[];
+  entry?: Destination["entry"];
+  currency?: string;
+  localNames?: Destination["localNames"];
 }
 
 export function dest(o: DestLite): Destination {
@@ -49,7 +55,7 @@ export function dest(o: DestLite): Destination {
     const day: DayTemplate = { title: d.title, base: d.base ?? baseId, stops: d.stops };
     const last = route[route.length - 1];
     if (d.group && last && last.id === d.group) last.days.push(day);
-    else route.push({ id: d.group ?? `${o.id}-${i}`, days: [day], priority: i + 1, minNights: d.minNights });
+    else route.push({ id: d.group ?? `${o.id}-${i}`, days: [day], priority: d.priority ?? i + 1, minNights: d.minNights, keywords: d.keywords });
   });
   return {
     id: o.id,
@@ -68,5 +74,8 @@ export function dest(o: DestLite): Destination {
     bestTime: o.bestTime,
     food: o.food,
     tips: o.tips ?? [],
+    entry: o.entry,
+    currency: o.currency,
+    localNames: o.localNames,
   };
 }

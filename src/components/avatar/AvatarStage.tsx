@@ -15,7 +15,6 @@ const AVATAR_SRC = "/avatar/saathi-3d.png";
 
 // Facial landmarks in % of the image box (image is 213×346).
 const FACE = {
-  mouth: { x: 52.7, y: 33.6 },
   eyeL: { x: 40.7, y: 23.9, w: 10.6 },
   eyeR: { x: 60.9, y: 23.4, w: 9.6 },
 };
@@ -65,6 +64,7 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
     let nodCooldown = 0;
     let nextAck = performance.now() + 2200;
     let breathPhase = 0;
+    let energy = 0;
     let last = performance.now();
     let raf = 0;
 
@@ -108,13 +108,13 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
       const float = reduce ? 0 : Math.sin(t * 0.75) * 3;
 
       const st = stage.style;
-      st.setProperty("--open", m.open.toFixed(3));
-      st.setProperty("--wide", m.wide.toFixed(3));
-      st.setProperty("--round", m.round.toFixed(3));
+      // Speech energy drives the ambient glow/rings and a subtle head/body cadence – no face overlays.
+      energy += ((m.active ? m.open : 0) - energy) * (1 - Math.pow(m.active && m.open > energy ? 0.0005 : 0.02, dt));
+      st.setProperty("--open", energy.toFixed(3));
       st.setProperty("--rx", `${(-pointer.y * 4 + pose.pitch + nod.x * 3.2).toFixed(2)}deg`);
       st.setProperty("--ry", `${(pointer.x * 7).toFixed(2)}deg`);
-      st.setProperty("--rz", `${(pose.tilt + pointer.x * 1.4 + drift + sway).toFixed(2)}deg`);
-      st.setProperty("--ty", `${(float + pose.drop + nod.x * 2.4 - breathe * 0.8).toFixed(2)}px`);
+      st.setProperty("--rz", `${(pose.tilt + pointer.x * 1.4 + drift + sway + energy * 0.35).toFixed(2)}deg`);
+      st.setProperty("--ty", `${(float + pose.drop + nod.x * 2.4 - breathe * 0.8 - energy * 1.1).toFixed(2)}px`);
       st.setProperty("--sc", `${(pose.lean + breathe * 0.004).toFixed(4)}`);
       st.setProperty("--sy", `${(1 + breathe * 0.007).toFixed(4)}`);
       st.setProperty("--bgx", `${(-pointer.x * 18).toFixed(1)}px`);
@@ -183,6 +183,14 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
       )}
       {state === "concerned" && <div className="alert-frame pointer-events-none absolute inset-0 rounded-3xl" />}
 
+      {/* speaking: soft ambient glow + harmonic rings behind the character, driven by speech cadence */}
+      <div className="speak-glow pointer-events-none absolute left-1/2 top-[38%] h-[70%] aspect-square -translate-x-1/2 -translate-y-1/2 rounded-full" aria-hidden />
+      <div className="voice-rings pointer-events-none absolute left-1/2 top-[30%] -translate-x-1/2 -translate-y-1/2" aria-hidden>
+        <span style={{ ["--i" as string]: 0 }} />
+        <span style={{ ["--i" as string]: 1 }} />
+        <span style={{ ["--i" as string]: 2 }} />
+      </div>
+
       <div className="stage-floor absolute bottom-[3%] left-1/2 h-[9%] w-[70%] -translate-x-1/2 rounded-[50%]" />
 
       <div className="figure-wrap absolute inset-x-0 bottom-0 top-[5%] flex items-end justify-center">
@@ -190,17 +198,6 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
           <div className="figure-inner relative h-full" style={{ aspectRatio: "213 / 346" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={AVATAR_SRC} alt="" draggable={false} fetchPriority="high" className="figure-img absolute inset-0 h-full w-full" />
-            {/* mouth cavity: aperture/width/rounding follow the viseme stream */}
-            <div className="mouth-cavity absolute" style={{ left: `${FACE.mouth.x}%`, top: `${FACE.mouth.y}%` }}>
-              <span className="mouth-teeth" />
-              <span className="mouth-tongue" />
-            </div>
-            {/* lower lip + chin drop with the jaw */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={AVATAR_SRC} alt="" draggable={false} className="jaw absolute inset-0 h-full w-full" />
-            {/* smile corners soften for rounded vowels and when concerned */}
-            <div className="smile-soft smile-l absolute" />
-            <div className="smile-soft smile-r absolute" />
             <div className="lid absolute" style={{ left: `${FACE.eyeL.x}%`, top: `${FACE.eyeL.y}%`, width: `${FACE.eyeL.w}%` }} />
             <div className="lid absolute" style={{ left: `${FACE.eyeR.x}%`, top: `${FACE.eyeR.y}%`, width: `${FACE.eyeR.w}%` }} />
             <div className="think-shimmer absolute inset-0" />
@@ -208,9 +205,10 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
         </div>
       </div>
 
-      <div className="vocal absolute bottom-[6%] left-1/2 flex h-8 -translate-x-1/2 items-end gap-[3px]" aria-hidden>
-        {[0.55, 0.85, 1, 0.75, 0.95, 0.6, 0.8].map((k, i) => (
-          <span key={i} style={{ ["--k" as string]: k, animationDelay: `${i * 90}ms` }} />
+      {/* studio voice-wave: symmetric, mirrored bars that breathe with the speech envelope */}
+      <div className="voice-wave absolute bottom-[5%] left-1/2 flex h-9 -translate-x-1/2 items-center gap-[3px]" aria-hidden>
+        {[0.35, 0.55, 0.8, 1, 0.8, 0.55, 0.35, 0.5, 0.75, 0.5, 0.35].map((k, i) => (
+          <span key={i} style={{ ["--k" as string]: k, ["--d" as string]: `${(i % 5) * 70}ms` }} />
         ))}
       </div>
 

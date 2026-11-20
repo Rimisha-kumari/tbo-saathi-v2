@@ -29,7 +29,11 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
   - `thinking`: a shimmer across the character plus orbiting dots
   - `speaking`: the jaw and mouth open in sync with the speech level, with head cadence and vocal pulse bars
   - `concerned`: a red alert aura, a lean and a softened smile
-- **Lip-sync** (`src/lib/speech/visemes.ts`, `src/lib/speech/useVoice.ts`). Each reply is turned into a timeline of mouth shapes, one per vowel or consonant, for Latin and the Devanagari, Bengali, Tamil and Telugu scripts. Vowels set how far the mouth opens and whether the lips spread (e/i) or round (o/u). Bilabials (p/b/m) close it. Commas and full stops add pauses, and stressed syllables trigger small head nods.
+- **Talking visual.** No mouth or lip overlays are drawn on the character. Instead, a speech-energy signal from the cadence timeline in `src/lib/speech/visemes.ts` drives:
+  - a soft glow and thin harmonic rings around the character
+  - a mirrored voice-wave at the base of the stage
+  - a subtle head and body motion
+- **Speech cadence** (`src/lib/speech/visemes.ts`, `src/lib/speech/useVoice.ts`). Each reply is turned into a timeline of mouth shapes, one per vowel or consonant, for Latin and the Devanagari, Bengali, Tamil and Telugu scripts. Vowels set how far the mouth opens and whether the lips spread (e/i) or round (o/u). Bilabials (p/b/m) close it. Commas and full stops add pauses, and stressed syllables trigger small head nods.
   - With browser speech, the timeline is re-synced on every word-`boundary` event and learns each voice's real speed after the first sentence.
   - With cloud TTS, the timeline is stretched to the audio length and opens only as wide as the actual loudness allows.
   - Easing is faster opening than closing, and neighbouring sounds blend into each other, so the mouth doesn't bounce mechanically.
@@ -46,6 +50,17 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
   - Voice status is known as soon as the page loads; it never shows "checking…".
 - **Agent tools.** Both the LLM agents and the demo agent run the same tools in `src/lib/agent/tools.ts`: `searchFlights`, `searchHotels`, `checkAvailability`, `updateItinerary`, `bookTrip`, `handleDisruption`, `cancelBooking`, `setAgentMode` and `getWeather`.
 - **Mock Indian inventory** (`src/data`), priced in INR (₹). It covers flights, transfers, weather and disruption reasons.
+- **Any destination, Indian or international, in both live-LLM and demo mode.** A destination is resolved in this order:
+  1. **Hand-curated circuits.** These include Jharkhand, Bihar (Patna → Nalanda/Rajgir → Bodh Gaya, flying home from Gaya) and Singapore, Dubai, Bangkok, Bali, Tokyo, London and Paris. They come with ₹ visa/entry costs, local currency notes, local flight times and hemisphere-aware weather.
+  2. **A world/India gazetteer** (`src/data/world/`). It has more than 90 places with real named highlights, local food, a price level, visa costs and per-night levies such as Bhutan's SDF. Its 80+ extra airports are merged into the flight and weather engine.
+  3. **Any other airport city.**
+  4. **Any free-text place name.** The Universal Destination Generator in `src/lib/travel/universal.ts` builds a clearly indicative, multi-day ₹ plan the traveller can refine. If no airport is known, flights are marked "TBC".
+- **Clean place-name parsing** (`src/lib/agent/placeParser.ts`). Filler phrases, money, durations, group sizes, dates and preference words are stripped in English, Hinglish and Hindi before the destination is extracted. So "Plan a 4 day Singapore trip" gives Singapore, and "Bihar trip under ₹30k" gives Bihar.
+- **Smarter international flights.**
+  - Home-country and Indian carriers are used, with connections through hubs in the direction of travel (Gulf/Istanbul westbound, Southeast Asia eastbound).
+  - Arrival times are local, with "+1 day" where needed.
+  - Overnight arrivals and pre-dawn returns are avoided.
+  - Seat and meal requests from traveller memory (e.g. "window seat", "veg meal (VGML)") appear on flights and vouchers.
 - **Destination knowledge base** (`src/data/destinations/`, planned by `src/lib/travel/planner.ts`). It has 28 Indian destinations, each with real named stops, local timings, hotels for each overnight base, cab tariffs, entry fees, food and practical tips.
   - Jharkhand is covered in depth: Ranchi (Hundru, Jonha and Sita Falls, Tagore Hill, Patratu Valley), Netarhat (Magnolia Point sunset, Sunrise Point, Upper and Lower Ghaghri) and Deoghar (Baidyanath Dham, Trikut ropeway, Basukinath). Deoghar is also available as a standalone trip.
   - States, regions and attractions are recognised in any supported script, e.g. "Jharkhand", "झारखंड", "নেতারহাট", "Deoghar".

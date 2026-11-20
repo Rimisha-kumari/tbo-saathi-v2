@@ -17,7 +17,7 @@ import type { Activity, DayWeather, Flight, Hotel, ItineraryDay, ItineraryItem, 
 
 /* ───────────────────────── Sun times (NOAA approximation, IST) ───────────────────────── */
 
-export function sunTimes(lat: number, lon: number, iso: string) {
+export function sunTimes(lat: number, lon: number, iso: string, tzMinutes = 330) {
   const d = new Date(iso + "T00:00:00Z");
   const start = Date.UTC(d.getUTCFullYear(), 0, 0);
   const n = Math.floor((d.getTime() - start) / 86400000);
@@ -27,15 +27,18 @@ export function sunTimes(lat: number, lon: number, iso: string) {
   const eot = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
   const cosH = (Math.cos(90.833 * rad) - Math.sin(lat * rad) * Math.sin(decl * rad)) / (Math.cos(lat * rad) * Math.cos(decl * rad));
   const H = Math.acos(Math.max(-1, Math.min(1, cosH))) / rad;
-  const noonIST = 720 - 4 * lon - eot + 330;
-  const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}`.replace(":60", ":59");
-  return { sunrise: fmt(noonIST - 4 * H), sunset: fmt(noonIST + 4 * H) };
+  const noonLocal = 720 - 4 * lon - eot + tzMinutes;
+  const fmt = (m: number) => {
+    const mm = ((Math.round(m) % 1440) + 1440) % 1440;
+    return `${String(Math.floor(mm / 60)).padStart(2, "0")}:${String(mm % 60).padStart(2, "0")}`;
+  };
+  return { sunrise: fmt(noonLocal - 4 * H), sunset: fmt(noonLocal + 4 * H) };
 }
 
-function resolveTime(spec: string, date: string, base: { lat: number; lon: number }) {
+function resolveTime(spec: string, date: string, base: { lat: number; lon: number }, tz = 330) {
   const m = /^(sunrise|sunset)([+-]\d+)?$/.exec(spec);
   if (!m) return spec;
-  const sun = sunTimes(base.lat, base.lon, date);
+  const sun = sunTimes(base.lat, base.lon, date, tz);
   return addMinutes(m[1] === "sunrise" ? sun.sunrise : sun.sunset, Number(m[2] ?? 0));
 }
 
@@ -47,12 +50,12 @@ export function vehicleFactor(travellers: number) {
 }
 const round50 = (n: number) => Math.round(n / 50) * 50;
 
-function resolveStop(s: StopSpec, date: string, base: Base, travellers: number): PlannedStop {
+function resolveStop(s: StopSpec, date: string, base: Base, travellers: number, tz = 330): PlannedStop {
   const per = s.per ?? "person";
   const cost = s.cost ?? 0;
   const label = s.tags?.includes("cab") && travellers > 3 ? s.name.replace("cab", travellers > 6 ? "tempo traveller" : "SUV") : s.name;
   return {
-    time: resolveTime(s.time, date, base),
+    time: resolveTime(s.time, date, base, tz),
     label,
     detail: s.note,
     cost: per === "group" && s.tags?.includes("cab") ? round50(cost * vehicleFactor(travellers)) : cost,
@@ -193,6 +196,7 @@ export interface DestinationPlan {
 
 export function planDestination(dest: Destination, startDate: string, nights: number, travellers: number, prefs: Preference[], strategy: Strategy, focus?: string): DestinationPlan {
   const templates = selectRoute(dest, nights, prefs, focus);
+  const tz = CITIES[dest.gateway]?.tz ?? 330; // stop times are local to the destination
   const dayPlan: PlannedDay[] = templates.map((tpl, i) => {
     const date = addDays(startDate, i + 1);
     // Sun-relative stops of a travel day use the destination base; others use the base of that night.
@@ -200,7 +204,7 @@ export function planDestination(dest: Destination, startDate: string, nights: nu
     const stops = tpl.stops
       .filter((s) => !(strategy === "cheapest" && s.optional))
       .filter((s) => !(has(prefs, "veg") && /mutton|chicken|fish|laal maas|pandi/i.test(s.name) && s.kind === "meal"))
-      .map((s) => resolveStop(s, date, base, travellers))
+      .map((s) => resolveStop(s, date, base, travellers, tz))
       .sort((a, b) => (a.time < b.time ? -1 : 1));
     return { title: tpl.title, base: tpl.base, baseName: base.name, stops, driveKm: tpl.driveKm };
   });
@@ -209,8 +213,8 @@ export function planDestination(dest: Destination, startDate: string, nights: nu
   const lastBase = getBase(dest, lastBaseId);
   return {
     dayPlan,
-    arrivalStops: dest.arrival.filter((s) => !(strategy === "cheapest" && s.optional)).map((s) => resolveStop(s, startDate, primary, travellers)),
-    departureStops: (lastBase.id === dest.primaryBase ? dest.departure : []).map((s) => resolveStop(s, addDays(startDate, nights), lastBase, travellers)),
+    arrivalStops: dest.arrival.filter((s) => !(strategy === "cheapest" && s.optional)).map((s) => resolveStop(s, startDate, primary, travellers, tz)),
+    departureStops: dest.departure.filter((s) => (s.base ?? dest.primaryBase) === lastBase.id).map((s) => resolveStop(s, addDays(startDate, nights), lastBase, travellers, tz)),
     lastBase,
   };
 }
@@ -275,11 +279,14 @@ export function buildPlannedDays(trip: TripPlan, rebookedFrom?: Flight): Itinera
         if (rebookedFrom) items.push({ time: rebookedFrom.depart, label: `${rebookedFrom.airline} ${rebookedFrom.flightNo} CANCELLED by airline`, kind: "note", alert: true });
         items.push({
           time: f.depart,
-          label: `${rebookedFrom ? "Rebooked: " : ""}${f.airline} ${f.flightNo} · ${f.from} → ${f.to} (${f.stops ? `1 stop via ${f.via}` : "non-stop"}, ${duration(f.durationMin)})`,
+          label: `${rebookedFrom ? "Rebooked: " : ""}${f.airline} ${f.flightNo} · ${f.from} → ${f.to} (${f.stops ? `1 stop via ${f.via}` : "non-stop"}, ${duration(f.durationMin)}) · arrives ${f.arrive}${f.nextDay ? " (+1 day)" : ""} local`,
+          detail: trip.requests?.length ? `Requested: ${trip.requests.join(", ")}` : undefined,
           kind: "flight",
           price: f.price * trip.travellers,
           alert: !!rebookedFrom,
         });
+        if (dest?.entry && dest.entry.perPerson > 0)
+          items.push({ time: addMinutes(f.depart, -240), label: `Visa / entry: ${dest.entry.label}`, detail: `${trip.travellers} × ₹${dest.entry.perPerson.toLocaleString("en-IN")} (indicative – verify before travel)`, kind: "note", price: dest.entry.perPerson * trip.travellers });
         const pickup = addMinutes(f.arrive, 25);
         if (tIn) items.push({ time: pickup, label: `${tIn.vehicle} pickup at arrivals → hotel${rebookedFrom ? " (re-timed)" : ""}`, kind: "transfer", price: tIn.price, alert: !!rebookedFrom });
         const checkIn = addMinutes(pickup, (tIn?.durationMin ?? 40) + 5);
@@ -290,6 +297,14 @@ export function buildPlannedDays(trip: TripPlan, rebookedFrom?: Flight): Itinera
         freeFrom = addMinutes(early ? checkIn : checkIn, 45);
         if (late) freeFrom = "23:59";
       }
+      if (!f) {
+        const hotel = stayAt(nightsAt[0]);
+        items.push({ time: "12:00", label: `Arrive in ${place} (flights added once you confirm your nearest airport)`, kind: "note" });
+        if (hotel) items.push({ time: "14:00", label: `Check-in at ${hotel.name}`, kind: "hotel" });
+        freeFrom = "15:00";
+      }
+      if (dest?.dailyFee)
+        items.push({ time: freeFrom, label: dest.dailyFee.label, detail: `${trip.travellers} × ${trip.nights} night(s) × ₹${dest.dailyFee.perPersonPerNight.toLocaleString("en-IN")}`, kind: "note", price: dest.dailyFee.perPersonPerNight * trip.nights * trip.travellers });
       const evening = (trip.arrivalStops ?? []).filter((s) => s.time >= freeFrom && s.time <= "22:00");
       if (evening.length) items.push(...evening.map((s) => toItem(s, trip.travellers)));
       else if (freeFrom < "21:30") items.push({ time: freeFrom > "20:00" ? freeFrom : "20:30", label: `Dinner near the hotel${dest?.food[0] ? ` – try ${dest.food[0]}` : ""}`, kind: "meal" });
@@ -300,12 +315,14 @@ export function buildPlannedDays(trip: TripPlan, rebookedFrom?: Flight): Itinera
       const hotel = stayAt(lastBase);
       const outMin = dest ? getBase(dest, lastBase).airportMinutes ?? dest.airportTransfer.minutes : tOut?.durationMin ?? 40;
       const leave = r ? addMinutes(r.depart, -(outMin + 120)) : "11:00";
-      const hasMorning = (trip.departureStops ?? []).some((s) => addMinutes(s.time, 90) <= leave);
-      items.push({ time: leave < "08:00" ? addMinutes(leave, -30) : hasMorning ? "07:15" : "08:00", label: `Breakfast & check-out${hotel ? ` – ${hotel.name}` : ""}`, kind: "meal" });
+      const morning = (trip.departureStops ?? []).filter((s) => addMinutes(s.time, 90) <= leave);
+      const breakfastStop = morning.some((s) => s.kind === "meal");
+      if (breakfastStop) items.push({ time: addMinutes(leave, -20), label: `Check-out${hotel ? ` – ${hotel.name}` : ""}`, kind: "hotel" });
+      else items.push({ time: leave < "08:00" ? addMinutes(leave, -30) : morning.length ? "07:15" : "08:00", label: `Breakfast & check-out${hotel ? ` – ${hotel.name}` : ""}`, kind: "meal" });
       for (const s of trip.departureStops ?? []) if (s.time >= "06:00" && addMinutes(s.time, 90) <= leave) items.push(toItem(s, trip.travellers));
       if (r) {
         if (tOut) items.push({ time: leave, label: `${tOut.vehicle} hotel → ${CITIES[r.from]?.name ?? r.from} airport (~${duration(outMin)})`, kind: "transfer", price: tOut.price });
-        items.push({ time: r.depart, label: `${r.airline} ${r.flightNo} · ${r.from} → ${r.to} (${r.stops ? `1 stop via ${r.via}` : "non-stop"})`, kind: "flight", price: r.price * trip.travellers });
+        items.push({ time: r.depart, label: `${r.airline} ${r.flightNo} · ${r.from} → ${r.to} (${r.stops ? `1 stop via ${r.via}` : "non-stop"}) · arrives ${r.arrive}${r.nextDay ? " (+1 day)" : ""} local`, detail: trip.requests?.length ? `Requested: ${trip.requests.join(", ")}` : undefined, kind: "flight", price: r.price * trip.travellers });
       }
     } else {
       const plan = trip.dayPlan?.[d - 1];
@@ -328,7 +345,8 @@ export function buildPlannedDays(trip: TripPlan, rebookedFrom?: Flight): Itinera
       }
       if (!items.length) items.push({ time: "10:00", label: "Free time to explore at your own pace", kind: "note" });
     }
-    days.push({ day: d + 1, date, title, weather: weatherFor(trip, date, baseForWeather), items: items.sort((a, b) => (a.time < b.time ? -1 : 1)) });
+    const keepOrder = d === 0 && !!trip.flight?.nextDay; // overnight arrival: chronological, not clock order
+    days.push({ day: d + 1, date, title, weather: weatherFor(trip, date, baseForWeather), items: keepOrder ? items : items.sort((a, b) => (a.time < b.time ? -1 : 1)) });
   }
   return days;
 }

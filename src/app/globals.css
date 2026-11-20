@@ -47,8 +47,6 @@ body {
 /* ───────────── Avatar stage ───────────── */
 .avatar-stage {
   --open: 0;
-  --wide: 0;
-  --round: 0;
   --rx: 0deg;
   --ry: 0deg;
   --rz: 0deg;
@@ -121,57 +119,11 @@ body {
 [data-state="concerned"] .figure-inner {
   filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.55)) drop-shadow(0 0 26px rgba(248, 113, 113, 0.35)) saturate(0.9);
 }
-.figure-img,
-.jaw {
+.figure-img {
   object-fit: contain;
   -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
   mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
   pointer-events: none;
-}
-
-/* lip-sync: jaw (lower lip + chin) drops with --open, revealing the mouth cavity */
-.jaw {
-  -webkit-mask-image:
-    radial-gradient(ellipse 12% 7% at 52.8% 36.5%, #000 55%, transparent 100%),
-    linear-gradient(to bottom, transparent 33.7%, #000 34.6%);
-  -webkit-mask-composite: source-in;
-  mask-image:
-    radial-gradient(ellipse 12% 7% at 52.8% 36.5%, #000 55%, transparent 100%),
-    linear-gradient(to bottom, transparent 33.7%, #000 34.6%);
-  mask-composite: intersect;
-  transform: translateY(calc(var(--open) * 1.2%)) scaleX(calc(1 - var(--round) * 0.03));
-  transform-origin: 52.8% 34%;
-}
-/* aperture from --open; spread vowels (e/i) widen, rounded vowels (o/u) narrow and circle the lips */
-.mouth-cavity {
-  width: 10.5%;
-  height: 3.2%;
-  transform: translate(-50%, -38%)
-    scaleY(calc(0.12 + var(--open) * 0.98 + var(--round) * var(--open) * 0.25))
-    scaleX(calc(0.72 + var(--open) * 0.14 + var(--wide) * 0.2 - var(--round) * 0.3));
-  border-radius: calc(45% + var(--round) * 5%) calc(45% + var(--round) * 5%) 55% 55% / calc(40% + var(--round) * 15%) calc(40% + var(--round) * 15%) 70% 70%;
-  background: radial-gradient(ellipse at 50% 90%, #b04a55 0%, #6b1f2a 38%, #2a0b10 78%);
-  box-shadow: inset 0 0 0 1px rgba(160, 70, 70, 0.55), inset 0 -2px 3px rgba(0, 0, 0, 0.5);
-  opacity: min(1, calc(var(--open) * 5));
-  overflow: hidden;
-}
-.mouth-teeth {
-  position: absolute;
-  inset: 0 8% auto 8%;
-  height: calc(34% - var(--open) * 10%);
-  background: linear-gradient(#fbfaf7, #e9e4dc);
-  border-radius: 0 0 40% 40%;
-  opacity: calc(0.95 - var(--round) * 0.5);
-}
-.mouth-tongue {
-  position: absolute;
-  left: 22%;
-  right: 22%;
-  bottom: -18%;
-  height: 52%;
-  border-radius: 50% 50% 0 0;
-  background: radial-gradient(ellipse at 50% 30%, #d06a72, #a3434d);
-  opacity: calc(var(--open) * 0.9);
 }
 
 .lid {
@@ -181,31 +133,6 @@ body {
   border-radius: 50% 50% 50% 50% / 70% 70% 45% 45%;
   background: linear-gradient(to bottom, #eab49a 0%, #dfa084 72%, #4a2a22 94%);
   filter: blur(0.5px);
-}
-
-.smile-soft {
-  width: 5.5%;
-  height: 3%;
-  border-radius: 50%;
-  filter: blur(1.6px);
-}
-.smile-l {
-  left: 43%;
-  top: 30.4%;
-  background: rgb(218, 152, 128);
-}
-.smile-r {
-  left: 58.6%;
-  top: 29.7%;
-  background: rgb(238, 182, 156);
-}
-/* rounded vowels purse the lips – soften the smile corners in proportion */
-.smile-soft {
-  opacity: calc(var(--round) * 0.55);
-  transition: none;
-}
-[data-state="concerned"] .smile-soft {
-  opacity: 0.8;
 }
 
 /* empathetic alert indicator during disruption handling */
@@ -270,22 +197,58 @@ body {
   to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
-.vocal span {
-  width: 4px;
-  border-radius: 99px;
-  background: linear-gradient(to top, var(--accent), #fff7ed);
-  height: calc(4px + var(--open) * var(--k) * 28px);
-  opacity: calc(0.25 + var(--open) * 1.2);
-  transition: height 60ms linear;
-  box-shadow: 0 0 10px rgba(var(--glow), 0.6);
+/* speaking glow – a soft warm light behind the character that swells with speech energy */
+.speak-glow {
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.22) 0%, rgba(249, 115, 22, 0.1) 38%, transparent 68%);
+  opacity: calc(var(--open) * 1.6);
+  transform: translate(-50%, -50%) scale(calc(0.92 + var(--open) * 0.14));
+  filter: blur(10px);
+  transition: opacity 0.25s ease;
 }
-[data-state="listening"] .vocal span {
-  animation: eq 0.9s ease-in-out infinite;
-  opacity: 0.85;
+/* harmonic rings around the head – thin, concentric, phase-offset */
+.voice-rings {
+  width: 58%;
+  aspect-ratio: 1;
+}
+.voice-rings span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(253, 230, 138, 0.55);
+  opacity: 0;
+  transform: scale(0.9);
+}
+[data-state="speaking"] .voice-rings span,
+[data-state="concerned"] .voice-rings span {
+  animation: harmonic 2.4s cubic-bezier(0.25, 0.6, 0.3, 1) infinite;
+  animation-delay: calc(var(--i) * 0.8s);
+}
+[data-state="concerned"] .voice-rings span {
+  border-color: rgba(252, 165, 165, 0.5);
+}
+@keyframes harmonic {
+  0% { transform: scale(0.88); opacity: 0; }
+  20% { opacity: calc(0.15 + var(--open) * 0.6); }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+/* studio voice-wave: mirrored bars, height follows the speech envelope */
+.voice-wave span {
+  width: 3px;
+  border-radius: 99px;
+  background: linear-gradient(to bottom, rgba(255, 247, 237, 0.9), var(--accent), rgba(255, 247, 237, 0.9));
+  height: calc(3px + var(--open) * var(--k) * 30px);
+  opacity: calc(0.18 + var(--open) * 1.1);
+  transition: height 90ms ease-out;
+  box-shadow: 0 0 8px rgba(var(--glow), 0.45);
+}
+[data-state="listening"] .voice-wave span {
+  animation: eq 1s ease-in-out infinite;
+  animation-delay: var(--d);
+  opacity: 0.8;
 }
 @keyframes eq {
-  0%, 100% { height: 5px; }
-  50% { height: calc(8px + var(--k) * 16px); }
+  0%, 100% { height: 4px; }
+  50% { height: calc(6px + var(--k) * 16px); }
 }
 
 .state-dot {
@@ -298,7 +261,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stage-aura, .ring-pulse, .orbit, .think-shimmer, .state-dot, .alert-frame { animation: none !important; }
+  .stage-aura, .ring-pulse, .orbit, .think-shimmer, .state-dot, .alert-frame, .voice-rings span { animation: none !important; }
 }
 
 /* ───────────── Misc UI ───────────── */

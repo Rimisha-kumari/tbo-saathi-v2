@@ -12,7 +12,12 @@ export interface City {
   lon: number;
   names: Partial<Record<Lang, string>>;
   aliases: string[];
-  climate: { base: number; monsoon: boolean; winterCold?: boolean };
+  /** ISO country code; India when absent */
+  country?: string;
+  /** UTC offset in minutes; IST (330) when absent */
+  tz?: number;
+  /** base = annual mean °C; amp = seasonal swing (peaks Jul in the north, Jan in the south); wet = rainy months */
+  climate: { base: number; monsoon: boolean; winterCold?: boolean; amp?: number; wet?: number[] };
 }
 
 export interface Flight {
@@ -23,7 +28,8 @@ export interface Flight {
   to: string;
   date: string; // YYYY-MM-DD
   depart: string; // HH:MM
-  arrive: string; // HH:MM
+  arrive: string; // HH:MM, local time at the destination
+  nextDay?: boolean; // arrives the day after departure (local time)
   durationMin: number;
   stops: number;
   via?: string;
@@ -142,6 +148,8 @@ export interface TripPlan {
   regionName?: string;
   /** places/interests the user explicitly asked for (kept across re-plans) */
   focus?: string;
+  /** service requests from traveller memory, e.g. "window seat", "veg meal (VGML)" */
+  requests?: string[];
   /** middle days (between arrival and departure), destination-specific */
   dayPlan?: PlannedDay[];
   /** hotel nights per base; the primary stay is mirrored in `hotel` */
