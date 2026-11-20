@@ -14,7 +14,7 @@ import { uid } from "@/lib/format";
 import { LANGS, speechCode, t } from "@/lib/i18n";
 import { pickVoice, useVoice } from "@/lib/speech/useVoice";
 import { initialState, reducer } from "@/lib/store";
-import type { AvatarState, ChatResponse, Effect, Lang, Tab, ToolTrace } from "@/lib/types";
+import type { AnsweredBy, AvatarState, ChatResponse, Effect, Lang, Tab, ToolTrace } from "@/lib/types";
 
 export default function SaathiApp() {
   const [s, dispatch] = useReducer(reducer, initialState);
@@ -37,8 +37,8 @@ export default function SaathiApp() {
   }, []);
 
   const say = useCallback(
-    (text: string, lang: Lang, tools?: ToolTrace[]) => {
-      dispatch({ type: "message", message: { id: uid("m"), role: "assistant", text, tools } });
+    (text: string, lang: Lang, tools?: ToolTrace[], answeredBy?: AnsweredBy) => {
+      dispatch({ type: "message", message: { id: uid("m"), role: "assistant", text, tools, answeredBy } });
       void voice.speak(text, speechCode(lang));
     },
     [voice],
@@ -68,7 +68,10 @@ export default function SaathiApp() {
         dispatch({ type: "prefs", prefs: data.prefs });
         dispatch({ type: "effects", effects: data.effects });
         dispatch({ type: "provider", provider: data.fallbackReason ? `fallback:${data.fallbackReason}` : data.provider });
-        say(data.reply, data.lang, data.tools);
+        const a = data.answeredBy;
+        if (a?.mode === "fallback") console.warn(`[Saathi] ⚠️ ${a.provider} (${a.model}) failed – demo brain answered. Reason: ${a.reason}`);
+        else if (a) console.info(`[Saathi] ${a.mode === "live" ? `✅ live ${a.provider} (${a.model})` : `ℹ️ demo brain – ${a.reason}`} · ${a.ms} ms`);
+        say(data.reply, data.lang, data.tools, data.answeredBy);
       } catch {
         say("Sorry – I couldn't reach the travel engine. Please try again.", c.lang);
       } finally {

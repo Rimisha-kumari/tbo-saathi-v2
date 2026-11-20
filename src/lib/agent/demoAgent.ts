@@ -4,6 +4,7 @@
  * LLM call fails), so every feature works out of the box.
  */
 import { cityName } from "@/data/cities";
+import { destinationNames, findDestinations, getDestination } from "@/data/destinations";
 import { addMinutes } from "@/data/flights";
 import { inr } from "@/lib/format";
 import { NO, YES } from "@/lib/i18n";
@@ -29,6 +30,10 @@ const WORD_NUM: Record<string, number> = {
 
 export interface Parsed {
   cities: string[];
+  /** knowledge-base destination id (e.g. "jharkhand") */
+  region?: string;
+  /** a place the user named that we have no data for */
+  unknownPlace?: string;
   origin?: string;
   destination?: string;
   budget?: number;
@@ -98,9 +103,40 @@ export function parse(raw: string): Parsed {
   if (om) nativeOrigin = findCities(text.slice(0, om.index + 1)).slice(-1)[0];
   const origin = fromCity ?? nativeOrigin;
   if (origin) out.origin = origin;
-  out.destination = out.cities.find((c) => c !== out.origin);
-  if (!out.destination && !origin && out.cities[0]) out.destination = out.cities[0];
+
+  // Destination: knowledge-base circuits first (states, hill stations, attractions, any script),
+  // ignoring the words that named the origin ("from Ranchi", "दिल्ली से").
+  let rest = text;
+  if (fromRe) rest = rest.replace(fromRe[0], " ");
+  else if (om && nativeOrigin) rest = rest.slice(0, om.index).replace(/\S+\s*$/, " ") + rest.slice(om.index + om[0].length);
+  const dests = findDestinations(rest);
+  if (dests.length) {
+    out.region = dests[0].dest.id;
+    out.destination = dests[0].dest.gateway;
+  } else {
+    out.destination = out.cities.find((c) => c !== out.origin);
+    if (!out.destination && !origin && out.cities[0]) out.destination = out.cities[0];
+  }
+  if (!out.destination) out.unknownPlace = unknownPlace(raw);
   return out;
+}
+
+const STOP = new Set(["a", "an", "the", "my", "our", "trip", "holiday", "vacation", "tour", "india", "somewhere", "it", "there", "me", "us", "plan", "family", "weekend", "beach", "hills", "mountains"]);
+
+/** Best-effort extraction of a destination name we don't have data for (e.g. "trip to Ziro Valley"). */
+function unknownPlace(raw: string): string | undefined {
+  const t = normaliseDigits(raw);
+  const patterns = [
+    /(?:trip to|travel(?:l?ing)? to|visit(?:ing)?|go(?:ing)? to|holiday in|holidays in|vacation in|tour of|getaway to|plan(?: a| my)?(?: \d+[- ](?:day|night)s?)?(?: trip| holiday| tour)? (?:to|in|for))\s+([A-Za-z][A-Za-z .'-]{2,28}?)(?=\s+(?:from|for|with|under|in|on|next|this|during|by|and|\d)\b|[,.!?]|$)/i,
+    /([A-Za-z][A-Za-z]{2,20}(?:\s[A-Z][a-z]+)?)\s+(?:jaana|jana|ghumna|ghoomna|ka trip|ki trip|trip)\b/i,
+    /(\S{2,20})\s+(?:जाना|घूमना|घूमने|की ट्रिप|की यात्रा|यात्रा)/,
+  ];
+  for (const re of patterns) {
+    const m = re.exec(t);
+    const name = m?.[1]?.trim();
+    if (name && !STOP.has(name.toLowerCase()) && !/^\d/.test(name)) return name.replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return undefined;
 }
 
 const RX = {
@@ -181,11 +217,16 @@ export function runDemoAgent(message: string, ctx: ToolContext, newPrefs: Prefer
 
   // Did this turn add preferences? Factor them into the existing plan.
   const prefsChanged = newPrefs.length > 0;
-  const hasTripParams = parsed.destination || parsed.budget || parsed.nights || parsed.travellers || parsed.startDate || parsed.origin;
+  const hasTripParams = parsed.destination || parsed.region || parsed.budget || parsed.nights || parsed.travellers || parsed.startDate || parsed.origin;
+
+  // Named a place we have no curated data for → say so honestly instead of inventing generic stops.
+  if (parsed.unknownPlace && !parsed.destination && (parsed.nights || parsed.budget || parsed.travellers || /trip|visit|travel|holiday|jaana|jana|ghumna|यात्रा|ट्रिप|जाना|घूम/i.test(text))) {
+    return p.unknownPlace({ place: parsed.unknownPlace, options: destinationNames().slice(0, 12).join(", ") });
+  }
 
   if (hasTripParams && (parsed.destination || ctx.trip)) {
     runTool("updateItinerary", {
-      origin: parsed.origin, destination: parsed.destination, budget: parsed.budget, nights: parsed.nights,
+      origin: parsed.origin, destination: parsed.region ?? parsed.destination, focus: parsed.region ? text : undefined, budget: parsed.budget, nights: parsed.nights,
       travellers: parsed.travellers, startDate: parsed.startDate,
       strategy: RX.premium.test(lower) ? "premium" : RX.cheaper.test(lower) ? "cheapest" : "balanced",
     }, ctx);
@@ -254,13 +295,20 @@ function planReply(ctx: ToolContext) {
   const t = ctx.trip!;
   const cost = costOf(t);
   const lang: Lang = ctx.lang;
+  const region = getDestination(t.region);
+  const short = t.regionName?.split(" (")[0];
+  const place = region?.localNames?.[lang] ?? (!short || short === cityName(t.destination) ? cityName(t.destination, lang) : short);
+  // Name the actual stops so the reply is as destination-specific as the itinerary itself.
+  const highlights = [...new Set((t.dayPlan ?? []).flatMap((d) => d.stops.filter((s) => s.kind === "activity").slice(0, 2).map((s) => s.label.split(/ [–(,]/)[0])))].slice(0, 5);
+  const stays = (t.stays ?? []).filter((st) => st.base !== t.stays?.[0]?.base).map((st) => `${st.baseName} (${st.nights}N)`);
+  const tail = highlights.length ? ` ${P(lang).highlights}: ${highlights.join(", ")}${stays.length ? ` · + ${stays.join(", ")}` : ""}.` : "";
   return P(lang).plan({
-    dest: cityName(t.destination, lang), origin: cityName(t.origin, lang), nights: t.nights, travellers: t.travellers,
+    dest: place, origin: cityName(t.origin, lang), nights: t.nights, travellers: t.travellers,
     total: inr(ctx.mode === "b2b" ? cost.total * (1 + ctx.markupPct / 100) : cost.total),
     budget: t.budget ? inr(t.budget) : undefined, within: !t.budget || cost.total <= t.budget,
     flight: t.flight ? `${t.flight.airline} ${t.flight.flightNo} (${t.flight.depart})` : "",
     hotel: t.hotel?.name ?? "", stars: t.hotel?.stars ?? 3, prefs: prefList(ctx.prefs),
-  });
+  }) + tail;
 }
 
 function compareReply(ctx: ToolContext) {

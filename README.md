@@ -45,7 +45,16 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
   - The reply language follows the script the user types in.
   - Voice status is known as soon as the page loads; it never shows "checking…".
 - **Agent tools.** Both the LLM agents and the demo agent run the same tools in `src/lib/agent/tools.ts`: `searchFlights`, `searchHotels`, `checkAvailability`, `updateItinerary`, `bookTrip`, `handleDisruption`, `cancelBooking`, `setAgentMode` and `getWeather`.
-- **Mock Indian inventory** (`src/data`), priced in INR (₹). It covers flights, hotels, transfers, sightseeing, weather and disruption reasons.
+- **Mock Indian inventory** (`src/data`), priced in INR (₹). It covers flights, transfers, weather and disruption reasons.
+- **Destination knowledge base** (`src/data/destinations/`, planned by `src/lib/travel/planner.ts`). It has 28 Indian destinations, each with real named stops, local timings, hotels for each overnight base, cab tariffs, entry fees, food and practical tips.
+  - Jharkhand is covered in depth: Ranchi (Hundru, Jonha and Sita Falls, Tagore Hill, Patratu Valley), Netarhat (Magnolia Point sunset, Sunrise Point, Upper and Lower Ghaghri) and Deoghar (Baidyanath Dham, Trikut ropeway, Basukinath). Deoghar is also available as a standalone trip.
+  - States, regions and attractions are recognised in any supported script, e.g. "Jharkhand", "झारखंड", "নেতারহাট", "Deoghar".
+  - The route is chosen by the number of nights, the traveller's interests (waterfalls, temples, heritage, beaches) and any places the user names. Naming Netarhat or Deoghar guarantees those days are included.
+  - Sunrise and sunset stops are calculated for the actual date and location.
+  - Multi-base trips get a hotel per base. A trip that ends somewhere else flies home from the nearest airport, e.g. Deoghar (DGH).
+  - Per-vehicle costs scale to an SUV or tempo traveller for larger groups.
+  - The budget meter adds up the actual itinerary items, so it always matches what's shown.
+  - If you name a place the demo brain has no data for, it says so instead of inventing generic stops. With an LLM key, Claude or OpenAI can plan anywhere by supplying `customDays`, and can look places up with the `getDestinationGuide` tool.
 - **Traveller memory bar.** Saathi picks up preferences from what you say in any of the six languages, such as window seat, veg or Jain meals, 4★ and above, budget, non-stop, beach or family. It applies them to its recommendations.
 - **Compare tab.** Flights and hotels are shown side by side with cheapest, fastest, top-rated and best-price badges. One click puts an option into the itinerary.
 - **Itinerary tab.** Shows the trip day by day with weather badges, a cost breakdown and a live budget meter.
@@ -72,6 +81,20 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
 | `SARVAM_API_KEY` (`SARVAM_TTS_SPEAKER`) | Indian-language TTS (`bulbul`) and STT (`saarika`). |
 | `BHASHINI_USER_ID` + `BHASHINI_API_KEY` (looks up the endpoint automatically), **or** `BHASHINI_INFERENCE_URL` + `BHASHINI_INFERENCE_KEY` + `BHASHINI_TTS_SERVICE_ID` | TTS through the Bhashini ULCA pipeline. |
 | `PROVIDER_TIMEOUT_MS` | How long to wait for an external provider before falling back (default 25000). |
+
+**Is the live LLM or the demo brain answering?** Every `/api/chat` turn logs a single line on the server:
+
+```
+[saathi/chat] ✅ LIVE LLM answered – anthropic (claude-opus-5-5) · 2.4s · tools: updateItinerary
+[saathi/chat] ⚠️  FALLBACK → demo brain – anthropic (claude-opus-5-5) failed: insufficient credits / quota (HTTP 400) · 0.6s
+[saathi/chat] ℹ️  DEMO brain answered – no LLM key configured (ANTHROPIC_API_KEY / OPENAI_API_KEY) · 0.0s
+```
+
+The same information appears in four other places:
+- in the response as `answeredBy` (`mode`: live, fallback or demo, plus `provider`, `model`, `reason` and `ms`)
+- in the `x-saathi-mode`, `x-saathi-answered-by` and `x-saathi-reason` response headers
+- as a badge under each assistant message
+- in the browser console
 
 Empty values and placeholders such as `your-key-here` count as "not configured". Keys are only ever read on the server. `GET /api/chat` and `GET /api/speech` report which providers are configured, without revealing any key values. When a configured LLM fails, the reply carries a `fallbackReason` and the header badge changes to "Demo fallback".
 

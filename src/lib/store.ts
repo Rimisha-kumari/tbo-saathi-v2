@@ -1,10 +1,11 @@
-import type { Booking, CompareSet, Effect, Lang, Mode, PendingAction, Preference, Tab, ToolTrace, TripPlan } from "./types";
+import type { AnsweredBy, Booking, CompareSet, Effect, Lang, Mode, PendingAction, Preference, Tab, ToolTrace, TripPlan } from "./types";
 
 export interface UIMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
   tools?: ToolTrace[];
+  answeredBy?: AnsweredBy;
 }
 
 export interface AppState {

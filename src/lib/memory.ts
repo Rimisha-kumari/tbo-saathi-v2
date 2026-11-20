@@ -24,6 +24,9 @@ const RULES: Rule[] = [
   { key: "beach", label: "Beach-side", icon: "🏖️", pattern: /beach|sea.?view|समुद्र|बीच|கடற்கரை|బీచ్|సముద్ర|সমুদ্র|বিচ/i },
   { key: "family", label: "Family / kids", icon: "👨‍👩‍👧", pattern: /family|kids|children|बच्चे|बच्चों|परिवार|குடும்ப|குழந்தை|కుటుంబ|పిల్లల|পরিবার|বাচ্চা/i },
   { key: "pool", label: "Pool", icon: "🏊", pattern: /pool|पूल|स्विमिंग|நீச்சல்|ఈత|সুইমিং/i },
+  { key: "waterfall", label: "Waterfalls & nature", icon: "💦", pattern: /waterfall|falls\b|झरना|झरने|जलप्रपात|அருவி|జలపాత|ঝরনা|জলপ্রপাত/i },
+  { key: "pilgrimage", label: "Temples & pilgrimage", icon: "🛕", pattern: /temple|pilgrimage|darshan|jyotirlinga|मंदिर|तीर्थ|दर्शन|கோயில்|ஆலயம்|ఆలయ|గుడి|মন্দির|তীর্থ/i },
+  { key: "heritage", label: "History & heritage", icon: "🏛️", pattern: /heritage|history|historic|fort|palace|museum|किला|महल|विरासत|இதிகாச|కోట|ঐতিহ্য|দুর্গ/i },
   { key: "breakfast", label: "Breakfast incl.", icon: "🍳", pattern: /breakfast|नाश्ता|नाश्ते|காலை உணவு|అల్పాహార|ব্রেকফাস্ট|জলখাবার/i },
 ];
 

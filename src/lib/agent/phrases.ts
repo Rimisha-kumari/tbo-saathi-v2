@@ -26,6 +26,8 @@ type Phr = {
   weather: (a: { dest: string; summary: string }) => string;
   selected: (a: { item: string; total: string }) => string;
   fallback: () => string;
+  unknownPlace: (a: { place: string; options: string }) => string;
+  highlights: string;
 };
 
 export const PHRASES: Record<Lang, Phr> = {
@@ -50,6 +52,8 @@ export const PHRASES: Record<Lang, Phr> = {
     weather: (a) => `Forecast for ${a.dest}: ${a.summary}.`,
     selected: (a) => `Updated – ${a.item} is in your itinerary. New total ${a.total}.`,
     fallback: () => "I can plan trips, compare flights & hotels, make it cheaper, book with your confirmation and handle disruptions. Where would you like to go?",
+    unknownPlace: (a) => `I don't have verified local data for ${a.place} in demo mode yet, so I won't invent a generic itinerary. Connect an LLM key (ANTHROPIC_API_KEY or OPENAI_API_KEY) for tailored plans anywhere, or pick a curated destination: ${a.options}.`,
+    highlights: "Highlights",
   },
   hi: {
     greet: () => "नमस्ते! मैं साथी हूँ, आपकी TBO ट्रैवल कंसल्टेंट। बताइए कहाँ जाना है, बजट कितना है और कौन-कौन जा रहा है – मैं प्लान, तुलना और बुकिंग सब कर दूँगी।",
@@ -72,6 +76,8 @@ export const PHRASES: Record<Lang, Phr> = {
     weather: (a) => `${a.dest} का मौसम: ${a.summary}।`,
     selected: (a) => `अपडेट हो गया – ${a.item} आपकी योजना में जोड़ दिया। नया कुल ${a.total}।`,
     fallback: () => "मैं ट्रिप प्लान, फ्लाइट-होटल की तुलना, सस्ता विकल्प, आपकी पुष्टि से बुकिंग और रुकावटें संभाल सकती हूँ। कहाँ जाना चाहेंगे?",
+    unknownPlace: (a) => `डेमो मोड में ${a.place} का सत्यापित स्थानीय डेटा अभी मेरे पास नहीं है, इसलिए मैं कोई सामान्य योजना नहीं गढ़ूँगी। किसी भी जगह की खास योजना के लिए LLM की (ANTHROPIC_API_KEY या OPENAI_API_KEY) जोड़ें, या इनमें से चुनें: ${a.options}।`,
+    highlights: "मुख्य आकर्षण",
   },
   hinglish: {
     greet: () => "Namaste! Main Saathi hoon, aapki TBO travel consultant. Batao kahan jaana hai, budget kitna hai aur kaun-kaun ja raha hai – plan, compare aur booking sab main kar dungi.",
@@ -94,6 +100,8 @@ export const PHRASES: Record<Lang, Phr> = {
     weather: (a) => `${a.dest} ka mausam: ${a.summary}.`,
     selected: (a) => `Update ho gaya – ${a.item} itinerary mein add. Naya total ${a.total}.`,
     fallback: () => "Main trip plan, flights-hotels compare, sasta option, confirmation ke saath booking aur disruptions handle kar sakti hoon. Kahan jaana hai?",
+    unknownPlace: (a) => `Demo mode mein ${a.place} ka verified local data abhi mere paas nahi hai, isliye main generic plan nahi banaungi. Kisi bhi jagah ke tailored plan ke liye LLM key (ANTHROPIC_API_KEY ya OPENAI_API_KEY) lagao, ya inmein se chuno: ${a.options}.`,
+    highlights: "Highlights",
   },
   ta: {
     greet: () => "வணக்கம்! நான் சாத்தி, உங்கள் TBO பயண ஆலோசகர். எங்கு செல்ல வேண்டும், பட்ஜெட் என்ன, யார் பயணம் செய்கிறார்கள் என்று சொல்லுங்கள் – திட்டமிடல், ஒப்பீடு, முன்பதிவு அனைத்தையும் நான் செய்கிறேன்.",
@@ -116,6 +124,8 @@ export const PHRASES: Record<Lang, Phr> = {
     weather: (a) => `${a.dest} வானிலை: ${a.summary}.`,
     selected: (a) => `புதுப்பிக்கப்பட்டது – ${a.item} சேர்க்கப்பட்டது. புதிய மொத்தம் ${a.total}.`,
     fallback: () => "பயணத் திட்டம், ஒப்பீடு, மலிவான விருப்பம், முன்பதிவு, இடையூறு மேலாண்மை – அனைத்தும் செய்வேன். எங்கு செல்ல விரும்புகிறீர்கள்?",
+    unknownPlace: (a) => `டெமோ முறையில் ${a.place} பற்றிய சரிபார்க்கப்பட்ட உள்ளூர் தகவல் இன்னும் இல்லை, அதனால் பொதுவான திட்டத்தை உருவாக்க மாட்டேன். எந்த இடத்திற்கும் LLM key சேர்க்கவும், அல்லது இவற்றில் தேர்ந்தெடுக்கவும்: ${a.options}.`,
+    highlights: "சிறப்பம்சங்கள்",
   },
   te: {
     greet: () => "నమస్కారం! నేను సాథి, మీ TBO ట్రావెల్ కన్సల్టెంట్. ఎక్కడికి వెళ్లాలి, బడ్జెట్ ఎంత, ఎవరెవరు ప్రయాణిస్తున్నారో చెప్పండి – ప్లాన్, పోలిక, బుకింగ్ అన్నీ నేను చూసుకుంటాను.",
@@ -138,6 +148,8 @@ export const PHRASES: Record<Lang, Phr> = {
     weather: (a) => `${a.dest} వాతావరణం: ${a.summary}.`,
     selected: (a) => `అప్‌డేట్ అయింది – ${a.item} జోడించాను. కొత్త మొత్తం ${a.total}.`,
     fallback: () => "ట్రిప్ ప్లాన్, పోలిక, చౌక ఎంపిక, బుకింగ్, అంతరాయాల నిర్వహణ – అన్నీ చేస్తాను. ఎక్కడికి వెళ్లాలనుకుంటున్నారు?",
+    unknownPlace: (a) => `డెమో మోడ్‌లో ${a.place} గురించి ధృవీకరించిన స్థానిక సమాచారం ఇంకా లేదు, అందుకే సాధారణ ప్లాన్ తయారు చేయను. ఏ ప్రదేశానికైనా LLM key జోడించండి, లేదా వీటిలో ఎంచుకోండి: ${a.options}.`,
+    highlights: "ముఖ్య ఆకర్షణలు",
   },
   bn: {
     greet: () => "নমস্কার! আমি সাথী, আপনার TBO ট্রাভেল কনসালট্যান্ট। কোথায় যেতে চান, বাজেট কত আর কারা যাচ্ছেন বলুন – পরিকল্পনা, তুলনা আর বুকিং সব আমি করে দেব।",
@@ -160,6 +172,8 @@ export const PHRASES: Record<Lang, Phr> = {
     weather: (a) => `${a.dest}-এর আবহাওয়া: ${a.summary}।`,
     selected: (a) => `আপডেট হয়েছে – ${a.item} যোগ করা হল। নতুন মোট ${a.total}।`,
     fallback: () => "ট্রিপ পরিকল্পনা, তুলনা, সস্তা বিকল্প, বুকিং আর বিঘ্ন সামলানো – সব পারি। কোথায় যেতে চান?",
+    unknownPlace: (a) => `ডেমো মোডে ${a.place}-এর যাচাই করা স্থানীয় তথ্য এখনও নেই, তাই সাধারণ পরিকল্পনা বানাব না। যেকোনো জায়গার জন্য LLM key যোগ করুন, অথবা এগুলো থেকে বাছুন: ${a.options}।`,
+    highlights: "প্রধান আকর্ষণ",
   },
 };
 

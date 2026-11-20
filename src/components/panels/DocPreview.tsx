@@ -37,7 +37,10 @@ function Itinerary({ trip, priceOf }: { trip: TripPlan; priceOf: (n: number) => 
               {d.items.map((it, i) => (
                 <tr key={i}>
                   <td style={{ ...S.td, width: 52, color: "#6b7280" }}>{it.time}</td>
-                  <td style={S.td}>{it.label}</td>
+                  <td style={S.td}>
+                    {it.label}
+                    {it.detail && <div style={{ color: "#6b7280", fontSize: 11 }}>{it.detail}</div>}
+                  </td>
                   <td style={{ ...S.td, textAlign: "right", width: 90, color: "#6b7280" }}>{it.price ? inr(priceOf(it.price)) : ""}</td>
                 </tr>
               ))}
@@ -54,7 +57,8 @@ export default function DocPreview({ doc, onClose }: { doc: DocSpec; onClose: ()
   const trip = doc.kind === "voucher" ? doc.booking.trip : doc.trip;
   const cost = costOf(trip);
   const priceOf = (n: number) => (doc.kind === "client" ? clientPrice(n, doc.markupPct) : n);
-  const title = doc.kind === "voucher" ? `Booking ${doc.booking.ref}` : `${cityName(trip.destination)} holiday – client itinerary`;
+  const placeName = trip.regionName?.split(" (")[0] ?? cityName(trip.destination);
+  const title = doc.kind === "voucher" ? `Booking ${doc.booking.ref}` : `${placeName} holiday – client itinerary`;
   const filename = doc.kind === "voucher" ? `TBO-Saathi-${doc.booking.ref}.html` : `TBO-Saathi-${cityName(trip.destination).split(" ")[0]}-itinerary.html`;
 
   const download = () => {
@@ -134,7 +138,9 @@ export default function DocPreview({ doc, onClose }: { doc: DocSpec; onClose: ()
                   <div style={S.card}>
                     {trip.flight && <div>✈ Onward: {trip.flight.airline} {trip.flight.flightNo} · {trip.flight.date} {trip.flight.depart} → {trip.flight.arrive}</div>}
                     {trip.returnFlight && <div>✈ Return: {trip.returnFlight.airline} {trip.returnFlight.flightNo} · {trip.returnFlight.date} {trip.returnFlight.depart} → {trip.returnFlight.arrive}</div>}
-                    {trip.hotel && <div>🏨 {trip.hotel.name}, {trip.hotel.area} · {trip.hotel.stars}★ · {trip.hotel.breakfast ? "breakfast included" : "room only"}</div>}
+                    {(trip.stays?.length ? trip.stays : trip.hotel ? [{ base: "main", baseName: "", hotel: trip.hotel, nights: trip.nights }] : []).map((st) => (
+                      <div key={st.hotel.id}>🏨 {st.nights}N · {st.hotel.name}, {st.hotel.area} · {st.hotel.stars}★ · {st.hotel.breakfast ? "breakfast included" : "room only"}</div>
+                    ))}
                     <div>🚗 Private airport transfers · 🎟 {trip.activities.length} guided experiences</div>
                   </div>
                   <Itinerary trip={trip} priceOf={priceOf} />

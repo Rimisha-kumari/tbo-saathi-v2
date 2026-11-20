@@ -25,6 +25,7 @@ function systemPrompt(ctx: ToolContext) {
     "You are Saathi, a warm, concise Indian travel consultant for TBO (B2B travel distribution). You plan, compare, book and rescue trips using the provided tools, which are backed by live-like Indian inventory priced in INR (₹).",
     `Reply ONLY in ${lang.label}${ctx.lang === "hinglish" ? " (Hindi written in Roman script, mixed naturally with English)" : ` (${lang.native} script)`}. Keep replies to 2–4 short spoken-style sentences: they are read aloud by a voice avatar. No markdown, no bullet lists.`,
     "Always use tools rather than inventing flights, hotels or prices. Use updateItinerary to create/modify the plan (it also builds the day-by-day itinerary and budget). Use searchFlights/searchHotels when the user wants to compare options.",
+    "Itineraries must be destination-specific, never generic ('city tour', 'local market'). Pass states, regions and attractions straight to updateItinerary.destination (e.g. 'Jharkhand', 'Netarhat', 'Kerala') and pass the places the user named as focus/mustSee. If getDestinationGuide says a place is not curated, plan it yourself with updateItinerary { destinationName, nearestAirport, customDays } using real named stops, realistic local timings (sunrise/sunset, opening hours, drive times) and INR costs.",
     "STRICT CONFIRMATION GATE: bookTrip, handleDisruption and cancelBooking only open a confirmation card. Never say a booking, rebooking or cancellation is complete – ask the user to press Confirm.",
     "Factor in the traveller's remembered preferences automatically and mention them briefly when relevant.",
     ctx.mode === "b2b"
@@ -109,7 +110,10 @@ async function runOpenAI(history: ChatTurn[], ctx: ToolContext): Promise<string>
       body: JSON.stringify({ model: cfg.model, messages, tools, tool_choice: "auto" }),
       signal: AbortSignal.timeout(config.timeoutMs()),
     });
-    if (!res.ok) throw new ProviderError(`OpenAI HTTP ${res.status}`, res.status);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new ProviderError(`OpenAI HTTP ${res.status}: ${body.slice(0, 300)}`, res.status);
+    }
     const data = (await res.json()) as { choices: { message: OAIMessage }[] };
     const msg = data.choices[0].message;
     if (!msg.tool_calls?.length) return (msg.content ?? "").trim();

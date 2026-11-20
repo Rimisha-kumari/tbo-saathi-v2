@@ -42,8 +42,11 @@ export default function ItineraryPanel({ trip, mode, markupPct, lang, busy, onBo
         <div className="flex items-start justify-between gap-2">
           <div>
             <div className="text-[15px] font-bold text-white">
-              {cityName(trip.origin, lang)} → {cityName(trip.destination, lang)}
+              {cityName(trip.origin, lang)} → {trip.regionName?.split(" (")[0] ?? cityName(trip.destination, lang)}
             </div>
+            {trip.stays && trip.stays.length > 1 && (
+              <div className="text-[11px] text-sky-200/80">🏨 {trip.stays.map((st) => `${st.baseName} ${st.nights}N`).join(" → ")}</div>
+            )}
             <div className="text-[11.5px] text-white/55">
               {prettyDate(trip.startDate)} – {prettyDate(addDays(trip.startDate, trip.nights))} · {trip.nights}N/{trip.nights + 1}D · {trip.travellers} pax · {trip.rooms} room{trip.rooms > 1 ? "s" : ""}
             </div>
@@ -134,7 +137,10 @@ export default function ItineraryPanel({ trip, mode, markupPct, lang, busy, onBo
                 <li key={i} className={`flex items-start gap-2 rounded-lg px-1.5 py-1 text-[11.5px] ${it.alert ? "bg-amber-400/10 text-amber-100" : "text-white/80"}`}>
                   <span className="w-10 shrink-0 font-mono text-[10.5px] text-white/45">{it.time}</span>
                   <span className="shrink-0">{KIND_ICON[it.kind]}</span>
-                  <span className="min-w-0 flex-1">{it.label}</span>
+                  <span className="min-w-0 flex-1">
+                    {it.label}
+                    {it.detail && <span className="block text-[10.5px] leading-snug text-white/40">{it.detail}</span>}
+                  </span>
                   {it.price ? <span className="shrink-0 text-[10.5px] text-white/45">{inr(mode === "b2b" ? clientPrice(it.price, markupPct) : it.price)}</span> : null}
                 </li>
               ))}

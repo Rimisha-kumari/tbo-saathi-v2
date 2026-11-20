@@ -84,6 +84,20 @@ export default function ChatPanel(p: Props) {
                 >
                   {m.text}
                 </div>
+                {m.answeredBy && (
+                  <span
+                    className={`mt-1 mr-1 inline-block rounded-md px-1.5 py-0.5 text-[9.5px] font-semibold ${
+                      m.answeredBy.mode === "live" ? "bg-emerald-500/15 text-emerald-300" : m.answeredBy.mode === "fallback" ? "bg-amber-500/15 text-amber-200" : "bg-white/8 text-white/50"
+                    }`}
+                    title={m.answeredBy.reason ?? `${m.answeredBy.provider} ${m.answeredBy.model ?? ""}`}
+                  >
+                    {m.answeredBy.mode === "live"
+                      ? `⚡ Live ${m.answeredBy.provider === "anthropic" ? "Claude" : "OpenAI"}`
+                      : m.answeredBy.mode === "fallback"
+                        ? `⚠️ Demo fallback · ${m.answeredBy.reason}`
+                        : "🧪 Demo brain"}
+                  </span>
+                )}
                 {m.role === "assistant" && (m.tools?.length || 0) > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {m.tools!.map((tl, i) => (

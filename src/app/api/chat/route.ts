@@ -5,7 +5,16 @@ import { flush, newContext } from "@/lib/agent/tools";
 import { config, describeError, llmProvider } from "@/lib/config";
 import { detectLang, NO, YES } from "@/lib/i18n";
 import { extractPreferences } from "@/lib/memory";
-import type { ChatRequest, ChatResponse } from "@/lib/types";
+import type { AnsweredBy, ChatRequest, ChatResponse } from "@/lib/types";
+
+/** One unambiguous console line per turn: did the live LLM or the demo brain answer, and why? */
+function logTurn(a: AnsweredBy, tools: string[]) {
+  const t = `${(a.ms / 1000).toFixed(1)}s`;
+  const tl = tools.length ? ` · tools: ${tools.join(", ")}` : "";
+  if (a.mode === "live") console.info(`[saathi/chat] ✅ LIVE LLM answered – ${a.provider} (${a.model}) · ${t}${tl}`);
+  else if (a.mode === "fallback") console.warn(`[saathi/chat] ⚠️  FALLBACK → demo brain – ${a.provider} (${a.model}) failed: ${a.reason} · ${t}${tl}`);
+  else console.info(`[saathi/chat] ℹ️  DEMO brain answered – ${a.reason} · ${t}${tl}`);
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,20 +53,21 @@ export async function POST(req: Request) {
 
   let ctx = newContext({ ...base });
   let reply = "";
-  let provider: ChatResponse["provider"] = "demo";
-  let fallbackReason: string | undefined;
+  const started = Date.now();
   const llm = llmProvider();
+  const model = llm === "anthropic" ? config.anthropic()?.model : llm === "openai" ? config.openai()?.model : undefined;
   // Answers to the confirmation gate are always handled deterministically.
   const gateAnswer = !!body.pending && (YES.test(last) || NO.test(last));
+  let answeredBy: Omit<AnsweredBy, "ms"> = { mode: "demo", provider: "demo", reason: llm ? "confirmation-gate answer (handled deterministically)" : "no LLM key configured (ANTHROPIC_API_KEY / OPENAI_API_KEY)" };
 
   if (llm && !gateAnswer) {
     try {
       reply = await runLLMAgent(llm, body.messages, ctx);
-      if (!reply) throw new Error("empty reply");
-      provider = llm;
+      if (!reply) throw new Error("empty reply from model");
+      answeredBy = { mode: "live", provider: llm, model };
     } catch (err) {
-      fallbackReason = `${llm === "anthropic" ? "Claude" : "OpenAI"}: ${describeError(err)}`;
-      console.warn(`[saathi] LLM failed (${fallbackReason}) – using Smart Demo Agent for this turn`);
+      const reason = `${describeError(err)}`;
+      answeredBy = { mode: "fallback", provider: llm, model, reason };
       ctx = newContext({ ...base }); // discard any partial tool effects from the failed run
       reply = "";
     }
@@ -67,6 +77,19 @@ export async function POST(req: Request) {
   const effects = flush(ctx);
   if (lang !== body.lang) effects.unshift({ type: "lang", lang });
 
-  const res: ChatResponse = { reply, lang, effects, prefs, tools: ctx.traces, provider, fallbackReason };
-  return NextResponse.json(res);
+  const final: AnsweredBy = { ...answeredBy, ms: Date.now() - started };
+  logTurn(final, ctx.traces.map((t) => t.name));
+  const res: ChatResponse = {
+    reply, lang, effects, prefs, tools: ctx.traces,
+    provider: final.mode === "live" ? (final.provider as ChatResponse["provider"]) : "demo",
+    fallbackReason: final.mode === "fallback" ? `${final.provider === "anthropic" ? "Claude" : "OpenAI"}: ${final.reason}` : undefined,
+    answeredBy: final,
+  };
+  return NextResponse.json(res, {
+    headers: {
+      "x-saathi-answered-by": final.mode === "live" ? `${final.provider}:${final.model}` : "demo",
+      "x-saathi-mode": final.mode,
+      ...(final.reason ? { "x-saathi-reason": encodeURIComponent(final.reason) } : {}),
+    },
+  });
 }

@@ -73,12 +73,18 @@ export function sttProvider(): "sarvam" | "openai" | null {
 /** Short, secret-free description of a provider failure for logs and the UI badge. */
 export function describeError(err: unknown): string {
   const status = typeof err === "object" && err && "status" in err ? (err as { status?: number }).status : undefined;
-  if (status === 401 || status === 403) return "invalid or unauthorised API key";
-  if (status === 429) return "rate limited";
-  if (status && status >= 500) return "provider unavailable";
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const tag = status ? ` (HTTP ${status})` : "";
+  if (/credit balance is too low|insufficient[_ ]quota|exceeded your current quota|billing/i.test(msg)) return `insufficient credits / quota${tag}`;
+  if (/model.*(not[_ ]found|does not exist)|not_found_error/i.test(msg) || status === 404) return `model not available${tag}`;
+  if (status === 401 || status === 403) return `invalid or unauthorised API key${tag}`;
+  if (status === 429) return `rate limited${tag}`;
+  if (status === 529 || /overloaded/i.test(msg)) return `provider overloaded${tag}`;
+  if (status && status >= 500) return `provider unavailable${tag}`;
+  if (/ENOTFOUND|ECONNREFUSED|fetch failed|network/i.test(msg)) return "network error reaching the provider";
   if (err instanceof Error) {
     if (err.name === "AbortError" || err.name === "TimeoutError" || /timed? ?out/i.test(err.message)) return "request timed out";
-    return err.message.replace(/sk-[\w-]+/g, "sk-***").slice(0, 120);
+    return (err.message.replace(/sk-[\w-]+/g, "sk-***").slice(0, 120) || "unknown error") + tag;
   }
   return "unknown error";
 }

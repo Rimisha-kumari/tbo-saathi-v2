@@ -2,13 +2,13 @@ import { CITIES } from "@/data/cities";
 import { addMinutes, flightInventory } from "@/data/flights";
 import { hotelInventory } from "@/data/hotels";
 import { transferOptions } from "@/data/transfers";
-import { activitiesFor } from "@/data/sightseeing";
-import { forecast } from "@/data/weather";
 import { disruptionReason } from "@/data/disruptions";
+import { getDestination, type Base, type Destination } from "@/data/destinations";
+import { activitiesFromPlan, buildPlannedDays, findHotelById, planDestination, planStays } from "./planner";
 import { has } from "@/lib/memory";
-import { addDays, defaultStartDate, duration, inr, uid } from "@/lib/format";
+import { addDays, defaultStartDate, inr, uid } from "@/lib/format";
 import type {
-  Activity, Booking, CostBreakdown, Flight, Hotel, ItineraryDay, ItineraryItem, Preference, Strategy, TripPlan, Voucher,
+  Booking, CostBreakdown, Flight, Hotel, ItineraryDay, Preference, Strategy, Transfer, TripPlan, Voucher,
 } from "@/lib/types";
 
 /* ───────────── City resolution ───────────── */
@@ -90,11 +90,25 @@ export function checkAvailability(kind: "flight" | "hotel", id: string, trip: Tr
 
 /* ───────────── Costing ───────────── */
 
+/**
+ * Trip cost. For planned trips the itinerary items are the single source of truth (cabs,
+ * entry fees, boat rides, meals), so the budget meter always matches what the traveller sees.
+ */
 export function costOf(trip: TripPlan): CostBreakdown {
   const flights = ((trip.flight?.price ?? 0) + (trip.returnFlight?.price ?? 0)) * trip.travellers;
-  const hotel = (trip.hotel?.pricePerNight ?? 0) * trip.nights * trip.rooms;
-  const transfers = trip.transfers.reduce((s, t) => s + t.price, 0);
-  const activities = trip.activities.reduce((s, a) => s + a.price, 0) * trip.travellers;
+  const hotel = trip.stays?.length
+    ? trip.stays.reduce((sum, st) => sum + st.hotel.pricePerNight * st.nights * trip.rooms, 0)
+    : (trip.hotel?.pricePerNight ?? 0) * trip.nights * trip.rooms;
+  let transfers: number;
+  let activities: number;
+  if (trip.days.length && (trip.dayPlan || trip.region)) {
+    const items = trip.days.flatMap((d) => d.items);
+    transfers = items.filter((i) => i.kind === "transfer").reduce((sum, i) => sum + (i.price ?? 0), 0);
+    activities = items.filter((i) => i.kind === "activity" || i.kind === "meal").reduce((sum, i) => sum + (i.price ?? 0), 0);
+  } else {
+    transfers = trip.transfers.reduce((sum, t) => sum + t.price, 0);
+    activities = trip.activities.reduce((sum, a) => sum + (a.perGroup ? a.price : a.price * trip.travellers), 0);
+  }
   const taxes = Math.round(hotel * 0.12);
   return { flights, hotel, transfers, activities, taxes, total: flights + hotel + transfers + activities + taxes };
 }
@@ -105,7 +119,11 @@ export const clientPrice = (net: number, markupPct: number) => Math.round(net * 
 
 export interface PlanInput {
   origin?: string;
+  /** gateway city code or destination id (e.g. "IXR" or "jharkhand") */
   destination: string;
+  region?: string;
+  /** places/interests the user named – their route groups are prioritised */
+  focus?: string;
   startDate?: string;
   nights?: number;
   travellers?: number;
@@ -113,114 +131,92 @@ export interface PlanInput {
   strategy?: Strategy;
 }
 
-function pickActivities(city: string, nights: number, prefs: Preference[], strategy: Strategy): Activity[] {
-  const all = activitiesFor(city);
-  const slots = Math.max(1, Math.min(all.length, nights * 2 - 1));
-  let ranked = [...all];
-  if (strategy === "cheapest") ranked.sort((a, b) => a.price - b.price);
-  if (has(prefs, "beach")) ranked.sort((a, b) => Number(b.tags.includes("beach")) - Number(a.tags.includes("beach")));
-  if (has(prefs, "family")) ranked = ranked.filter((a) => !a.tags.includes("adventure")).concat(ranked.filter((a) => a.tags.includes("adventure")));
-  const picked = ranked.slice(0, strategy === "cheapest" ? Math.max(1, slots - 1) : slots);
-  return picked;
+const round50 = (n: number) => Math.round(n / 50) * 50;
+
+function airportTransfers(dest: Destination, lastBase: Base, travellers: number): Transfer[] {
+  const big = travellers > 3;
+  const vehicle = travellers > 6 ? "Tempo traveller (12-seater)" : big ? "Private SUV (Innova Crysta)" : "Private sedan (Dzire / Etios)";
+  const rate = (travellers > 6 ? 1.6 : 1) * (big ? dest.airportTransfer.suv : dest.airportTransfer.sedan);
+  const outMinutes = lastBase.airport ? lastBase.airportMinutes ?? 25 : lastBase.airportMinutes ?? dest.airportTransfer.minutes;
+  return [
+    { id: `T-${dest.id}-in`, city: dest.gateway, kind: "airport-hotel", vehicle, price: round50(rate), durationMin: dest.airportTransfer.minutes },
+    { id: `T-${dest.id}-out`, city: lastBase.airport ?? dest.gateway, kind: "hotel-airport", vehicle, price: round50(lastBase.airport ? Math.min(rate, 900) : rate * Math.max(1, outMinutes / dest.airportTransfer.minutes)), durationMin: outMinutes },
+  ];
 }
 
 export function planTrip(input: PlanInput, prefs: Preference[]): TripPlan {
-  const origin = input.origin && input.origin !== input.destination ? input.origin : input.destination === "DEL" ? "BOM" : "DEL";
+  const dest = getDestination(input.region ?? input.destination);
+  const destination = dest?.gateway ?? input.destination;
+  const origin = input.origin && input.origin !== destination ? input.origin : destination === "DEL" ? "BOM" : "DEL";
   const nights = Math.max(1, Math.min(10, input.nights ?? 3));
-  const travellers = Math.max(1, Math.min(9, input.travellers ?? 2));
+  const travellers = Math.max(1, Math.min(12, input.travellers ?? 2));
   const startDate = input.startDate ?? defaultStartDate();
   const strategy = input.strategy ?? "balanced";
   const budget = input.budget ?? 0;
+  const rooms = Math.ceil(travellers / 2);
 
-  const out = flightInventory(origin, input.destination, startDate);
-  const back = flightInventory(input.destination, origin, addDays(startDate, nights));
+  const trip: TripPlan = { origin, destination, startDate, nights, travellers, rooms, budget, strategy, transfers: [], activities: [], days: [] };
+  let returnFrom = destination;
+  if (dest) {
+    const p = planDestination(dest, startDate, nights, travellers, prefs, strategy, input.focus);
+    Object.assign(trip, { focus: input.focus, region: dest.id, regionName: dest.name, dayPlan: p.dayPlan, arrivalStops: p.arrivalStops, departureStops: p.departureStops });
+    trip.transfers = airportTransfers(dest, p.lastBase, travellers);
+    returnFrom = p.lastBase.airport ?? dest.gateway;
+  } else {
+    trip.transfers = transferOptions(destination, travellers);
+    trip.dayPlan = [];
+  }
+
   const filt = (l: Flight[]) => (has(prefs, "nonstop") && l.some((f) => f.stops === 0) ? l.filter((f) => f.stops === 0) : l);
   const byScore = (l: Flight[], extra: (f: Flight) => number = () => 0) =>
     [...filt(l)].sort((a, b) => flightScore(a, prefs, strategy) + extra(a) - (flightScore(b, prefs, strategy) + extra(b)));
-  const flight = byScore(out)[0];
-  // On the way back, prefer afternoon departures so the last day isn't wasted.
-  const returnFlight = byScore(back, (f) => (strategy === "cheapest" ? 0 : f.depart >= "13:00" ? -600 : 400))[0];
+  // Land early enough to use the first evening; on the way back prefer afternoon departures.
+  trip.flight = byScore(flightInventory(origin, destination, startDate), (f) => (strategy === "cheapest" ? 0 : f.arrive > "17:30" ? 500 : 0))[0];
+  trip.returnFlight = byScore(flightInventory(returnFrom, origin, addDays(startDate, nights)), (f) => (strategy === "cheapest" ? 0 : f.depart >= "13:00" ? -600 : 400))[0];
 
-  const transfers = transferOptions(input.destination, travellers);
-  const activities = pickActivities(input.destination, nights, prefs, strategy);
-  const rooms = Math.ceil(travellers / 2);
-
-  const base: TripPlan = {
-    origin, destination: input.destination, startDate, nights, travellers, rooms, budget, strategy,
-    flight, returnFlight, transfers, activities, days: [],
-  };
-  base.hotel = chooseHotel(base, prefs, strategy);
-  base.days = buildDays(base);
-  return base;
-}
-
-function chooseHotel(trip: TripPlan, prefs: Preference[], strategy: Strategy): Hotel {
-  const candidates = searchHotels(trip.destination, prefs);
-  if (strategy === "premium") return candidates[0];
-  if (strategy === "cheapest") return [...candidates].sort((a, b) => a.pricePerNight - b.pricePerNight)[0];
-  if (!trip.budget) return candidates[0];
-  const fixed = costOf({ ...trip, hotel: undefined }).total;
-  const perNight = (trip.budget - fixed) / (trip.nights * trip.rooms * 1.12);
-  return candidates.find((h) => h.pricePerNight <= perNight) ?? [...candidates].sort((a, b) => a.pricePerNight - b.pricePerNight)[0];
+  // Hotels: allowance per room-night = what the budget leaves after everything else.
+  trip.days = buildDays(trip);
+  if (dest) {
+    const fixed = costOf(trip).total;
+    const perNight = budget ? (budget - fixed) / (nights * rooms * 1.12) : undefined;
+    trip.stays = planStays(trip, dest, prefs, strategy, perNight);
+    trip.hotel = trip.stays.find((st) => st.base === dest.primaryBase)?.hotel ?? trip.stays[0]?.hotel;
+  } else {
+    const list = searchHotels(destination, prefs);
+    trip.hotel = strategy === "cheapest" ? [...list].sort((a, b) => a.pricePerNight - b.pricePerNight)[0] : list[0];
+  }
+  trip.days = buildDays(trip);
+  trip.activities = activitiesFromPlan(trip);
+  return trip;
 }
 
 export function buildDays(trip: TripPlan, rebookedFrom?: Flight): ItineraryDay[] {
-  const days: ItineraryDay[] = [];
-  const city = CITIES[trip.destination]?.name ?? trip.destination;
-  const acts = [...trip.activities];
-  const tIn = trip.transfers.find((t) => t.kind === "airport-hotel");
-  const tOut = trip.transfers.find((t) => t.kind === "hotel-airport");
+  return buildPlannedDays(trip, rebookedFrom);
+}
 
-  for (let d = 0; d <= trip.nights; d++) {
-    const date = addDays(trip.startDate, d);
-    const items: ItineraryItem[] = [];
-    let title = "";
-    if (d === 0) {
-      title = `Arrive in ${city}`;
-      const f = trip.flight;
-      if (f) {
-        if (rebookedFrom)
-          items.push({ time: rebookedFrom.depart, label: `${rebookedFrom.airline} ${rebookedFrom.flightNo} CANCELLED by airline`, kind: "note", alert: true });
-        items.push({
-          time: f.depart,
-          label: `${rebookedFrom ? "Rebooked: " : ""}${f.airline} ${f.flightNo} · ${f.from} → ${f.to} (${f.stops ? `1 stop via ${f.via}` : "non-stop"}, ${duration(f.durationMin)})`,
-          kind: "flight", price: f.price * trip.travellers, alert: !!rebookedFrom,
-        });
-        const pickup = addMinutes(f.arrive, 25);
-        if (tIn) items.push({ time: pickup, label: `${tIn.vehicle} pickup at arrivals → hotel${rebookedFrom ? " (re-timed)" : ""}`, kind: "transfer", price: tIn.price, alert: !!rebookedFrom });
-        const checkIn = addMinutes(pickup, (tIn?.durationMin ?? 40) + 5);
-        const late = checkIn >= "20:00" || checkIn < "04:00";
-        if (trip.hotel)
-          items.push({ time: checkIn < "14:00" && checkIn > "04:00" ? "14:00" : checkIn, label: `Check-in at ${trip.hotel.name}${late ? " – late arrival guaranteed" : checkIn < "14:00" && checkIn > "04:00" ? " (early check-in requested)" : ""}`, kind: "hotel", alert: !!rebookedFrom && late });
-        const evening = acts.findIndex((a) => a.slot === "evening");
-        if (evening >= 0 && f.arrive < "16:00" && trip.nights > 1) {
-          const a = acts.splice(evening, 1)[0];
-          items.push({ time: "18:30", label: a.name, kind: "activity", price: a.price * trip.travellers });
-        } else items.push({ time: "20:30", label: "Welcome dinner near the hotel", kind: "meal" });
-      }
-    } else if (d === trip.nights) {
-      title = `Departure day`;
-      items.push({ time: "08:00", label: "Breakfast & check-out", kind: "meal" });
-      const r = trip.returnFlight;
-      if (r) {
-        const leave = addMinutes(r.depart, -((tOut?.durationMin ?? 40) + 120));
-        if (tOut) items.push({ time: leave, label: `${tOut.vehicle} hotel → ${CITIES[r.from]?.name ?? r.from} airport`, kind: "transfer", price: tOut.price });
-        items.push({ time: r.depart, label: `${r.airline} ${r.flightNo} · ${r.from} → ${r.to} (${r.stops ? `1 stop via ${r.via}` : "non-stop"})`, kind: "flight", price: r.price * trip.travellers });
-      }
-    } else {
-      const morning = acts.findIndex((a) => a.slot !== "evening");
-      const evening = acts.findIndex((a) => a.slot === "evening");
-      const first = morning >= 0 ? acts.splice(morning, 1)[0] : undefined;
-      title = first ? first.name.split(/[–,(]/)[0].trim() : `Leisure day in ${city}`;
-      if (first) items.push({ time: first.slot === "morning" ? "09:00" : "14:00", label: first.name, kind: "activity", price: first.price * trip.travellers });
-      else items.push({ time: "10:00", label: "Free time – relax at the hotel", kind: "note" });
-      items.push({ time: "13:30", label: "Local lunch", kind: "meal" });
-      const ev = evening >= 0 ? acts.splice(acts.findIndex((a) => a.slot === "evening"), 1)[0] : acts.shift();
-      if (ev) items.push({ time: ev.slot === "evening" ? "18:00" : "16:00", label: ev.name, kind: "activity", price: ev.price * trip.travellers });
-    }
-    days.push({ day: d + 1, date, title, weather: forecast(trip.destination, date), items: items.sort((a, b) => (a.time < b.time ? -1 : 1)) });
-  }
-  return days;
+/** Apply LLM-authored day plans (any destination) onto a trip. */
+export function applyCustomDays(trip: TripPlan, days: { title: string; base?: string; stops: { time: string; name: string; note?: string; costPerPerson?: number; costPerGroup?: number }[] }[], regionName?: string): TripPlan {
+  const next: TripPlan = { ...trip, regionName: regionName ?? trip.regionName };
+  const place = regionName ?? trip.regionName ?? CITIES[trip.destination]?.name ?? trip.destination;
+  next.dayPlan = Array.from({ length: Math.max(0, trip.nights - 1) }, (_, i) => {
+    const d = days[i];
+    return {
+      title: d?.title ?? `Free day in ${place}`,
+      base: d?.base ?? trip.dayPlan?.[i]?.base ?? "custom",
+      baseName: d?.base ?? place,
+      stops: (d?.stops ?? []).map((st) => ({
+        time: /^\d{1,2}:\d{2}$/.test(st.time) ? st.time.padStart(5, "0") : "10:00",
+        label: st.name,
+        detail: st.note,
+        cost: Math.max(0, Math.round(st.costPerGroup ?? st.costPerPerson ?? 0)),
+        per: st.costPerGroup ? ("group" as const) : ("person" as const),
+        kind: /lunch|dinner|breakfast|meal|thali/i.test(st.name) ? ("meal" as const) : /cab|transfer|drive/i.test(st.name) ? ("transfer" as const) : ("activity" as const),
+      })).sort((a, b) => (a.time < b.time ? -1 : 1)),
+    };
+  });
+  next.days = buildDays(next);
+  next.activities = activitiesFromPlan(next);
+  return next;
 }
 
 export function selectInTrip(trip: TripPlan, sel: { flightId?: string; returnFlightId?: string; hotelId?: string }): TripPlan {
@@ -230,12 +226,20 @@ export function selectInTrip(trip: TripPlan, sel: { flightId?: string; returnFli
     if (f) next.flight = f;
   }
   if (sel.returnFlightId) {
-    const f = flightInventory(trip.destination, trip.origin, addDays(trip.startDate, trip.nights)).find((x) => x.id === sel.returnFlightId);
+    const from = trip.returnFlight?.from ?? trip.destination;
+    const f = flightInventory(from, trip.origin, addDays(trip.startDate, trip.nights)).find((x) => x.id === sel.returnFlightId);
     if (f) next.returnFlight = f;
   }
   if (sel.hotelId) {
-    const h = hotelInventory(trip.destination).find((x) => x.id === sel.hotelId);
-    if (h) next.hotel = h;
+    const h = findHotelById(sel.hotelId) ?? hotelInventory(trip.region ?? trip.destination).find((x) => x.id === sel.hotelId);
+    if (h) {
+      const baseId = /^H-[a-z0-9-]+?-([a-z0-9]+)-\d+$/.exec(h.id)?.[1];
+      if (next.stays?.length && baseId) {
+        next.stays = next.stays.map((st) => (st.base === baseId ? { ...st, hotel: h } : st));
+        const dest = getDestination(trip.region);
+        if (!dest || baseId === dest.primaryBase) next.hotel = h;
+      } else next.hotel = h;
+    }
   }
   next.days = buildDays(next);
   return next;
@@ -243,7 +247,13 @@ export function selectInTrip(trip: TripPlan, sel: { flightId?: string; returnFli
 
 export function makeCheaper(trip: TripPlan, prefs: Preference[]) {
   const before = costOf(trip).total;
-  const cheaper = planTrip({ ...trip, strategy: "cheapest" }, prefs);
+  let cheaper: TripPlan;
+  if (trip.region) cheaper = planTrip({ ...trip, region: trip.region, focus: trip.focus, strategy: "cheapest" }, prefs);
+  else {
+    const base = planTrip({ ...trip, strategy: "cheapest" }, prefs);
+    cheaper = { ...base, regionName: trip.regionName, dayPlan: trip.dayPlan };
+    cheaper.days = buildDays(cheaper);
+  }
   const after = costOf(cheaper).total;
   return { trip: cheaper, saved: Math.max(0, before - after), before, after };
 }
@@ -254,7 +264,7 @@ const code = (n = 6) => Array.from({ length: n }, () => "ABCDEFGHJKLMNPQRSTUVWXY
 
 function vouchersFor(trip: TripPlan): Voucher[] {
   const v: Voucher[] = [];
-  const city = CITIES[trip.destination]?.name ?? trip.destination;
+  const city = trip.regionName?.split(" (")[0] ?? CITIES[trip.destination]?.name ?? trip.destination;
   for (const f of [trip.flight, trip.returnFlight]) {
     if (!f) continue;
     v.push({
@@ -262,10 +272,11 @@ function vouchersFor(trip: TripPlan): Voucher[] {
       lines: [`${f.date} · ${f.depart} → ${f.arrive}`, `${trip.travellers} traveller(s) · ${f.fareType} fare · ${f.baggage} check-in`, f.meal === "veg-included" ? "Veg meal included" : "Meal: pre-book on web check-in"],
     });
   }
-  if (trip.hotel)
+  const stays = trip.stays?.length ? trip.stays : trip.hotel ? [{ base: "main", baseName: city, hotel: trip.hotel, nights: trip.nights }] : [];
+  for (const st of stays)
     v.push({
-      id: uid("V"), kind: "hotel", title: trip.hotel.name, code: `CNF ${code(8)}`,
-      lines: [`${trip.hotel.area}, ${city}`, `${trip.startDate} → ${addDays(trip.startDate, trip.nights)} · ${trip.nights} night(s) · ${trip.rooms} room(s)`, trip.hotel.breakfast ? "Breakfast included" : "Room only", trip.hotel.freeCancellation ? "Free cancellation up to 48h before check-in" : "Non-refundable"],
+      id: uid("V"), kind: "hotel", title: st.hotel.name, code: `CNF ${code(8)}`,
+      lines: [`${st.hotel.area}${st.baseName && !st.hotel.area.includes(st.baseName) ? `, ${st.baseName}` : ""}`, `${st.nights} night(s) · ${trip.rooms} room(s) · trip ${trip.startDate} → ${addDays(trip.startDate, trip.nights)}`, st.hotel.breakfast ? "Breakfast included" : "Room only", st.hotel.freeCancellation ? "Free cancellation up to 48h before check-in" : "Non-refundable"],
     });
   for (const t of trip.transfers)
     v.push({ id: uid("V"), kind: "transfer", title: `${t.kind === "airport-hotel" ? "Arrival" : "Departure"} transfer · ${t.vehicle}`, code: `TRF ${code(5)}`, lines: [`${city} · approx. ${t.durationMin} min`, "Driver details shared 4h before pickup"] });

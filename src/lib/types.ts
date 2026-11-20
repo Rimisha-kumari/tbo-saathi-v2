@@ -70,8 +70,37 @@ export interface Activity {
   name: string;
   slot: "morning" | "afternoon" | "evening";
   durationH: number;
-  price: number; // per person
+  price: number; // per person (or per vehicle/boat when perGroup)
   tags: string[];
+  perGroup?: boolean;
+}
+
+/** A resolved, dated stop in a destination-specific day plan. */
+export interface PlannedStop {
+  time: string;
+  label: string;
+  detail?: string;
+  cost: number;
+  per: "person" | "group";
+  kind: "activity" | "meal" | "transfer" | "note";
+  optional?: boolean;
+  tags?: string[];
+}
+
+export interface PlannedDay {
+  title: string;
+  base: string;
+  baseName: string;
+  stops: PlannedStop[];
+  driveKm?: number;
+}
+
+/** Nights spent at one base of a multi-base circuit (e.g. Ranchi → Netarhat → Ranchi). */
+export interface Stay {
+  base: string;
+  baseName: string;
+  hotel: Hotel;
+  nights: number;
 }
 
 export interface DayWeather {
@@ -84,6 +113,7 @@ export interface DayWeather {
 export interface ItineraryItem {
   time: string;
   label: string;
+  detail?: string;
   kind: "flight" | "hotel" | "transfer" | "activity" | "meal" | "note";
   price?: number;
   alert?: boolean;
@@ -106,6 +136,19 @@ export interface TripPlan {
   rooms: number;
   budget: number;
   strategy: Strategy;
+  /** destination knowledge-base id (e.g. "jharkhand"); absent for custom/LLM-defined places */
+  region?: string;
+  /** display name of the destination (e.g. "Jharkhand (Ranchi · Netarhat · Deoghar)") */
+  regionName?: string;
+  /** places/interests the user explicitly asked for (kept across re-plans) */
+  focus?: string;
+  /** middle days (between arrival and departure), destination-specific */
+  dayPlan?: PlannedDay[];
+  /** hotel nights per base; the primary stay is mirrored in `hotel` */
+  stays?: Stay[];
+  /** evening ideas on arrival day / morning ideas on departure day */
+  arrivalStops?: PlannedStop[];
+  departureStops?: PlannedStop[];
   flight?: Flight;
   returnFlight?: Flight;
   hotel?: Hotel;
@@ -203,4 +246,15 @@ export interface ChatResponse {
   provider: "anthropic" | "openai" | "demo";
   /** set when a configured LLM failed and the Smart Demo Agent answered instead */
   fallbackReason?: string;
+  /** who answered this turn – also sent as x-saathi-* response headers and logged server-side */
+  answeredBy: AnsweredBy;
+}
+
+export interface AnsweredBy {
+  /** live = LLM answered · fallback = LLM configured but failed → demo brain · demo = no LLM key (or deterministic gate answer) */
+  mode: "live" | "fallback" | "demo";
+  provider: "anthropic" | "openai" | "demo";
+  model?: string;
+  reason?: string;
+  ms: number;
 }
