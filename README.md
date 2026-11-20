@@ -43,7 +43,11 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
 - **Microphone** (`useVoice().listen`).
   - Asks for mic permission explicitly and recognises speech in the selected language (`en-IN`, `hi-IN`, `ta-IN`, `te-IN` or `bn-IN`; Hinglish uses `en-IN`).
   - Shows the live transcript as you speak. With **Auto** on, the message sends itself when you stop talking. With Auto off, the transcript goes into the input box for you to review.
-  - Permission denied, no microphone, no speech, network problems and unsupported browsers each show a status message that clears on its own.
+  - **Works on any HTTPS website, not just localhost.** Browsers only expose the microphone in a secure context, i.e. an `https://` URL (or `localhost` during development), and only after the user grants permission.
+    - On an unencrypted `http://` address, the mic shows a clear "needs a secure https:// connection" message and the header badge reads "Mic needs https://". It never gets stuck.
+    - Deploy behind HTTPS and voice input works.
+  - **Fallback to server transcription.** If the browser has no `SpeechRecognition`, or it fails (speech service offline, service blocked, language unsupported, or never starts), Saathi records with `MediaRecorder` and transcribes through `/api/speech`, using Sarvam or OpenAI when a key is set.
+  - Permission denied, no microphone, no speech and unsupported browsers each show a status message that clears on its own.
   - Watchdogs end the session if recognition hasn't started after 5 s, if nothing is heard for 8 s, or after 20 s in total. If the speech engine stops responding, the app resets the mic itself, so it can never get stuck listening.
 - **Languages.** English, Hindi (`hi-IN`), Hinglish, Tamil (`ta-IN`), Telugu (`te-IN`) and Bengali (`bn-IN`) are supported in the UI, the agent replies, speech recognition and speech output.
   - The reply language follows the script the user types in.

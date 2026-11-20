@@ -145,7 +145,7 @@ export default function ChatPanel(p: Props) {
 
       {(p.mic.status !== "idle" || p.interim) && (
         <div
-          className={`mx-3 mb-2 flex items-center gap-2 rounded-xl border px-3 py-1.5 text-[12px] ${
+          className={`mx-3 mb-2 flex items-start gap-2 rounded-xl border px-3 py-1.5 text-[12px] ${
             p.mic.status === "error" || p.mic.status === "unsupported"
               ? "border-amber-400/30 bg-amber-500/10 text-amber-100"
               : "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
@@ -154,7 +154,7 @@ export default function ChatPanel(p: Props) {
           aria-live="polite"
         >
           <span aria-hidden>{p.mic.status === "error" || p.mic.status === "unsupported" ? "⚠️" : p.mic.status === "processing" ? "⏳" : "🎙️"}</span>
-          <span className="min-w-0 flex-1 truncate">
+          <span className={`min-w-0 flex-1 ${p.mic.status === "error" || p.mic.status === "unsupported" ? "leading-snug" : "truncate"}`}>
             {p.interim ? <span className="italic text-white">“{p.interim}”</span> : p.mic.message}
           </span>
           {(p.mic.status === "error" || p.mic.status === "unsupported") && (

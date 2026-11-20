@@ -173,6 +173,7 @@ export default function SaathiApp() {
   /* Voice readiness – resolved immediately on mount, refined when voices load */
   const langCode = speechCode(s.lang);
   const voiceInfo = useMemo(() => {
+    if (!voice.status.secure) return { label: "Mic needs https://", ok: false };
     if (voice.status.cloudTTS) return { label: `${voice.status.cloudTTS} · ${langCode}`, ok: true };
     if (!voice.status.synth) return { label: "Text-timed lip-sync", ok: false };
     const v = pickVoice(voice.voices, langCode);

@@ -100,8 +100,12 @@ export function pickVoice(voices: SpeechSynthesisVoice[], lang: string): SpeechS
   return undefined;
 }
 
+/** Shown when the page isn't a secure context – browsers only expose the microphone on https:// (or localhost). */
+export const INSECURE_MIC_MESSAGE =
+  "Voice input needs a secure https:// connection. Open this site using its https:// address (it works on any HTTPS website, and on localhost during development), allow microphone access, then tap the mic again. You can keep typing meanwhile.";
+
 const SR_ERRORS: Record<string, string> = {
-  "not-allowed": "Microphone access is blocked. Allow the mic in your browser's site settings, then tap the mic again.",
+  "not-allowed": "Microphone permission is blocked for this site. Click the lock/site-settings icon in the address bar, set Microphone to Allow, then tap the mic again.",
   "service-not-allowed": "Speech recognition is disabled in this browser. Type your message instead.",
   "audio-capture": "No microphone was found. Check that one is connected.",
   network: "The speech service couldn't be reached. Check your connection or type instead.",
@@ -380,7 +384,7 @@ export function useVoice() {
   /** Ask for mic permission explicitly so the prompt appears and errors are clear. */
   const ensurePermission = useCallback(async (): Promise<string | null> => {
     if (permissionOk.current) return null;
-    if (!window.isSecureContext) return "The microphone only works on HTTPS or localhost. Open the app over HTTPS to speak.";
+    if (!window.isSecureContext) return INSECURE_MIC_MESSAGE;
     if (!navigator.mediaDevices?.getUserMedia) return null; // let the recogniser prompt by itself
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -399,7 +403,8 @@ export function useVoice() {
   const listenCloud = useCallback(
     async ({ lang, onFinal }: ListenOptions) => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported?.(m));
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       rec.onstop = async () => {
@@ -414,7 +419,11 @@ export function useVoice() {
             fr.readAsDataURL(blob);
           });
           const r = await fetch("/api/speech", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "stt", audio: b64, mime: rec.mimeType, lang }) });
-          const d = (await r.json()) as { text?: string };
+          const d = (await r.json()) as { text?: string; reason?: string };
+          if (!r.ok) {
+            fail(`Server transcription is unavailable right now${d.reason ? ` (${d.reason})` : ""}. Please type your message.`);
+            return;
+          }
           if (d.text?.trim()) {
             setMic({ status: "idle" });
             onFinal(d.text.trim());
@@ -424,7 +433,7 @@ export function useVoice() {
         }
       };
       recorderRef.current = rec;
-      setMic({ status: "listening", message: "Recording – tap again to stop" });
+      setMic({ status: "listening", message: `Recording (${lang}) – tap the mic again to stop` });
       rec.start();
       timers.current.push(window.setTimeout(() => rec.state === "recording" && rec.stop(), 9000));
     },
@@ -438,19 +447,30 @@ export function useVoice() {
         return;
       }
       stop(); // never let Saathi talk over the user
+      // 1. Secure context: browsers only allow the mic on https:// pages (or localhost).
+      if (!window.isSecureContext) {
+        fail(INSECURE_MIC_MESSAGE, "unsupported");
+        return;
+      }
       const Ctor = getSR();
-      if (!Ctor && !status.cloudSTT) {
-        fail("Voice input isn't supported in this browser. Use Chrome or Edge, or type your message.", "unsupported");
+      const canRecord = typeof window.MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+      const cloudOk = !!status.cloudSTT && canRecord;
+      if (!Ctor && !cloudOk) {
+        fail(
+          "This browser has no built-in speech recognition. Try Chrome, Edge or Safari – or ask the site owner to enable server transcription (SARVAM_API_KEY or OPENAI_API_KEY). You can type your message meanwhile.",
+          "unsupported",
+        );
         return;
       }
       setInterim("");
-      setMic({ status: "requesting", message: "Requesting microphone…" });
+      setMic({ status: "requesting", message: "Requesting microphone permission…" });
       const denied = await ensurePermission();
       if (denied) {
         fail(denied);
         return;
       }
 
+      // 2. No browser recogniser → record with MediaRecorder and transcribe via /api/speech.
       if (!Ctor) {
         try {
           await listenCloud(opts);
@@ -459,6 +479,14 @@ export function useVoice() {
         }
         return;
       }
+
+      /** Recogniser failed for a reason recording can work around → switch to server transcription. */
+      const fallbackToCloud = (why: string) => {
+        if (!cloudOk) return false;
+        setMic({ status: "requesting", message: `${why} – switching to server transcription…` });
+        listenCloud(opts).catch(() => fail(SR_ERRORS["not-allowed"]));
+        return true;
+      };
 
       setMic({ status: "requesting", message: "Starting voice input…" });
       const rec = new Ctor();
@@ -501,7 +529,20 @@ export function useVoice() {
       };
 
       // Watchdogs: engine must start within 5 s; nothing heard in 8 s → stop; hard cap 20 s.
-      timers.current.push(window.setTimeout(() => !started && forceEnd("Voice input couldn't start. Check your microphone or type instead."), 5000));
+      timers.current.push(
+        window.setTimeout(() => {
+          if (started || recRef.current !== rec) return;
+          rec.onresult = rec.onerror = rec.onend = rec.onstart = rec.onspeechstart = null;
+          try {
+            rec.abort();
+          } catch {
+            /* ignore */
+          }
+          recRef.current = null;
+          clearTimers();
+          if (!fallbackToCloud("Browser recognition didn't start")) fail("Voice input couldn't start. Check your microphone permission, or type instead.");
+        }, 5000),
+      );
       timers.current.push(window.setTimeout(() => !heard && recRef.current === rec && softStop(), 8000));
       timers.current.push(window.setTimeout(() => recRef.current === rec && softStop(), 20000));
 
@@ -525,6 +566,10 @@ export function useVoice() {
         errored = true;
         clearTimers();
         recRef.current = null;
+        rec.onend = null;
+        // Errors the browser's speech service causes (offline, blocked service, unsupported language)
+        // can be bypassed by recording audio and transcribing on the server.
+        if (["network", "service-not-allowed", "language-not-supported"].includes(e.error) && fallbackToCloud(e.error === "network" ? "Browser speech service unreachable" : "Browser recognition unavailable")) return;
         fail(SR_ERRORS[e.error] ?? `Voice input error (${e.error}). Please try again.`, e.error === "service-not-allowed" ? "unsupported" : "error");
       };
       rec.onend = () => {
