@@ -47,6 +47,9 @@ body {
 /* ───────────── Avatar stage ───────────── */
 .avatar-stage {
   --open: 0;
+  --mouth: 0;
+  --wide: 0;
+  --round: 0;
   --rx: 0deg;
   --ry: 0deg;
   --rz: 0deg;
@@ -124,6 +127,35 @@ body {
   -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
   mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
   pointer-events: none;
+}
+
+/* ───── Lip-sync: warp the real mouth, no pasted shapes ─────
+ * Mouth centre ≈ (52.8%, 33.4%) of the 213×346 artwork; upper-lip line ≈ 32.9%.
+ * The copy is masked to a feathered ellipse around the mouth and chin and scaled vertically from the
+ * upper-lip line, so the lower lip and chin drop naturally while the upper lip/teeth stay anchored. */
+.mouth-warp {
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-mask-image: radial-gradient(ellipse 10.5% 6.2% at 52.8% 34.6%, #000 45%, rgba(0, 0, 0, 0.6) 70%, transparent 100%);
+  mask-image: radial-gradient(ellipse 10.5% 6.2% at 52.8% 34.6%, #000 45%, rgba(0, 0, 0, 0.6) 70%, transparent 100%);
+  transform-origin: 52.8% 32.9%;
+  transform: scaleY(calc(1 + var(--mouth) * 0.26 + var(--round) * var(--mouth) * 0.05)) scaleX(calc(1 + var(--wide) * var(--mouth) * 0.045 - var(--round) * var(--mouth) * 0.07));
+  will-change: transform;
+}
+/* inner-mouth shadow: multiply-blended over the real teeth/lips, so it reads as depth, not a sticker */
+.mouth-shade {
+  left: 52.3%;
+  top: 33.45%;
+  width: 8.6%;
+  height: 2.6%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 45%, rgba(70, 18, 24, 0.95) 0%, rgba(110, 35, 40, 0.7) 45%, rgba(150, 70, 70, 0) 75%);
+  mix-blend-mode: multiply;
+  filter: blur(0.6px);
+  pointer-events: none;
+  opacity: calc(var(--mouth) * 0.75);
+  transform: translate(-50%, -30%) scaleY(calc(0.2 + var(--mouth) * 1.15)) scaleX(calc(0.75 + var(--wide) * 0.25 - var(--round) * 0.3));
+  transform-origin: 50% 0%;
 }
 
 .lid {

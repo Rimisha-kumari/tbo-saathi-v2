@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { config, describeError, ProviderError, sttProvider, ttsProvider } from "@/lib/config";
+import { config, describeError, markProviderDown, markProviderUp, ProviderError, providerDown, sttChain, sttProvider, ttsChain, ttsProvider } from "@/lib/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +22,10 @@ export async function GET() {
   return NextResponse.json({
     tts: ttsProvider(),
     stt: sttProvider(),
+    cooling: (["sarvam", "bhashini", "openai"] as const).flatMap((p) => {
+      const d = providerDown(`tts:${p}`) ?? providerDown(`stt:${p}`);
+      return d ? [{ provider: p, ...d }] : [];
+    }),
     configured: {
       sarvam: !!config.sarvam(),
       bhashini: b ? (b.inferenceUrl && b.inferenceKey && b.ttsServiceId ? "direct" : "discovery") : false,
@@ -65,37 +69,53 @@ const timeout = () => AbortSignal.timeout(Math.min(20000, config.timeoutMs()));
 /* ───────────────────────────── Text-to-speech ───────────────────────────── */
 
 async function tts(text: string, lang: string) {
-  const provider = ttsProvider();
-  if (!provider) return browser("no server TTS key configured");
+  const chain = ttsChain();
+  if (!chain.length) return browser(config.sarvam() || config.bhashini() || config.openai() ? "server voices cooling down after errors" : "no server TTS key configured");
+  const errors: string[] = [];
+  // Sarvam → Bhashini → OpenAI; a credit/quota failure cools that provider down and tries the next.
+  for (const provider of chain) {
+    try {
+      const out = await ttsWith(provider, text, lang);
+      markProviderUp(`tts:${provider}`);
+      return NextResponse.json({ provider, ...out });
+    } catch (e) {
+      const reason = describeError(e);
+      markProviderDown(`tts:${provider}`, reason);
+      // an account out of credits can't transcribe either
+      if (/credits|quota|unauthori/i.test(reason) && provider !== "bhashini") markProviderDown(`stt:${provider}`, reason);
+      errors.push(`${provider}: ${reason}`);
+      console.warn(`[saathi/speech] ⚠️  TTS ${provider} failed (${reason}) – trying next / browser voice`);
+    }
+  }
+  return browser(errors.join(" · "), 502);
+}
 
+async function ttsWith(provider: "sarvam" | "bhashini" | "openai", text: string, lang: string): Promise<{ audio: string; mime: string }> {
   if (provider === "sarvam") {
     const cfg = config.sarvam()!;
-    const r = await fetch("https://api.sarvam.ai/text-to-speech", {
+    const r = await fetch(`${cfg.baseUrl}/text-to-speech`, {
       method: "POST",
       headers: { "content-type": "application/json", "api-subscription-key": cfg.apiKey },
       body: JSON.stringify({ text, target_language_code: lang, speaker: cfg.speaker, model: cfg.ttsModel }),
       signal: timeout(),
     });
-    if (!r.ok) throw new ProviderError(`Sarvam TTS HTTP ${r.status}`, r.status);
+    if (!r.ok) throw new ProviderError(`Sarvam TTS HTTP ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`, r.status);
     const data = (await r.json()) as { audios?: string[] };
     if (!data.audios?.[0]) throw new ProviderError("Sarvam TTS returned no audio");
-    return NextResponse.json({ provider, audio: data.audios[0], mime: "audio/wav" });
+    return { audio: data.audios[0], mime: "audio/wav" };
   }
 
-  if (provider === "bhashini") {
-    const audio = await bhashiniTTS(text, lang.split("-")[0]);
-    return NextResponse.json({ provider, audio, mime: "audio/wav" });
-  }
+  if (provider === "bhashini") return { audio: await bhashiniTTS(text, lang.split("-")[0]), mime: "audio/wav" };
 
   const cfg = config.openai()!;
-  const r = await fetch("https://api.openai.com/v1/audio/speech", {
+  const r = await fetch(`${cfg.baseUrl}/audio/speech`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${cfg.apiKey}` },
     body: JSON.stringify({ model: cfg.ttsModel, voice: "shimmer", input: text, response_format: "mp3" }),
     signal: timeout(),
   });
-  if (!r.ok) throw new ProviderError(`OpenAI TTS HTTP ${r.status}`, r.status);
-  return NextResponse.json({ provider, audio: Buffer.from(await r.arrayBuffer()).toString("base64"), mime: "audio/mpeg" });
+  if (!r.ok) throw new ProviderError(`OpenAI TTS HTTP ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`, r.status);
+  return { audio: Buffer.from(await r.arrayBuffer()).toString("base64"), mime: "audio/mpeg" };
 }
 
 /* Bhashini: either a directly configured inference endpoint, or ULCA pipeline discovery (cached per language). */
@@ -147,8 +167,26 @@ async function bhashiniTTS(text: string, language: string) {
 /* ───────────────────────────── Speech-to-text ───────────────────────────── */
 
 async function stt(audioB64: string, mime: string, lang: string) {
-  const provider = sttProvider();
-  if (!provider) return browser("no server STT key configured");
+  const chain = sttChain();
+  if (!chain.length) return browser(config.sarvam() || config.openai() ? "server transcription cooling down after errors" : "no server STT key configured");
+  const errors: string[] = [];
+  for (const provider of chain) {
+    try {
+      const text = await sttWith(provider, audioB64, mime, lang);
+      markProviderUp(`stt:${provider}`);
+      return NextResponse.json({ provider, text });
+    } catch (e) {
+      const reason = describeError(e);
+      markProviderDown(`stt:${provider}`, reason);
+      if (/credits|quota|unauthori/i.test(reason)) markProviderDown(`tts:${provider}`, reason);
+      errors.push(`${provider}: ${reason}`);
+      console.warn(`[saathi/speech] ⚠️  STT ${provider} failed (${reason})`);
+    }
+  }
+  return browser(errors.join(" · "), 502);
+}
+
+async function sttWith(provider: "sarvam" | "openai", audioB64: string, mime: string, lang: string): Promise<string> {
   const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") ? "m4a" : mime.includes("wav") ? "wav" : "webm";
   const form = new FormData();
   form.append("file", new Blob([Buffer.from(audioB64, "base64")], { type: mime }), `speech.${ext}`);
@@ -157,17 +195,15 @@ async function stt(audioB64: string, mime: string, lang: string) {
     const cfg = config.sarvam()!;
     form.append("model", cfg.sttModel);
     form.append("language_code", lang);
-    const r = await fetch("https://api.sarvam.ai/speech-to-text", { method: "POST", headers: { "api-subscription-key": cfg.apiKey }, body: form, signal: timeout() });
-    if (!r.ok) throw new ProviderError(`Sarvam STT HTTP ${r.status}`, r.status);
-    const data = (await r.json()) as { transcript?: string };
-    return NextResponse.json({ provider, text: data.transcript ?? "" });
+    const r = await fetch(`${cfg.baseUrl}/speech-to-text`, { method: "POST", headers: { "api-subscription-key": cfg.apiKey }, body: form, signal: timeout() });
+    if (!r.ok) throw new ProviderError(`Sarvam STT HTTP ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`, r.status);
+    return ((await r.json()) as { transcript?: string }).transcript ?? "";
   }
 
   const cfg = config.openai()!;
   form.append("model", cfg.sttModel);
   form.append("language", lang.split("-")[0]);
-  const r = await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { authorization: `Bearer ${cfg.apiKey}` }, body: form, signal: timeout() });
-  if (!r.ok) throw new ProviderError(`OpenAI STT HTTP ${r.status}`, r.status);
-  const data = (await r.json()) as { text?: string };
-  return NextResponse.json({ provider, text: data.text ?? "" });
+  const r = await fetch(`${cfg.baseUrl}/audio/transcriptions`, { method: "POST", headers: { authorization: `Bearer ${cfg.apiKey}` }, body: form, signal: timeout() });
+  if (!r.ok) throw new ProviderError(`OpenAI STT HTTP ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`, r.status);
+  return ((await r.json()) as { text?: string }).text ?? "";
 }

@@ -111,6 +111,10 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
       // Speech energy drives the ambient glow/rings and a subtle head/body cadence – no face overlays.
       energy += ((m.active ? m.open : 0) - energy) * (1 - Math.pow(m.active && m.open > energy ? 0.0005 : 0.02, dt));
       st.setProperty("--open", energy.toFixed(3));
+      // mouth shape (already eased in the voice driver): aperture, lip spread, rounding
+      st.setProperty("--mouth", (m.active || m.open > 0.01 ? m.open : 0).toFixed(3));
+      st.setProperty("--wide", m.wide.toFixed(3));
+      st.setProperty("--round", m.round.toFixed(3));
       st.setProperty("--rx", `${(-pointer.y * 4 + pose.pitch + nod.x * 3.2).toFixed(2)}deg`);
       st.setProperty("--ry", `${(pointer.x * 7).toFixed(2)}deg`);
       st.setProperty("--rz", `${(pose.tilt + pointer.x * 1.4 + drift + sway + energy * 0.35).toFixed(2)}deg`);
@@ -198,6 +202,11 @@ export default function AvatarStage({ state, mouthRef, stateLabel }: Props) {
           <div className="figure-inner relative h-full" style={{ aspectRatio: "213 / 346" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={AVATAR_SRC} alt="" draggable={false} fetchPriority="high" className="figure-img absolute inset-0 h-full w-full" />
+            {/* lip-sync: the character's own mouth/chin pixels, feathered and stretched from the upper-lip
+                line (identical to the base image at rest → calm smile), plus a multiply-blend inner-mouth shade */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={AVATAR_SRC} alt="" draggable={false} className="mouth-warp absolute inset-0 h-full w-full" />
+            <div className="mouth-shade absolute" />
             <div className="lid absolute" style={{ left: `${FACE.eyeL.x}%`, top: `${FACE.eyeL.y}%`, width: `${FACE.eyeL.w}%` }} />
             <div className="lid absolute" style={{ left: `${FACE.eyeR.x}%`, top: `${FACE.eyeR.y}%`, width: `${FACE.eyeR.w}%` }} />
             <div className="think-shimmer absolute inset-0" />

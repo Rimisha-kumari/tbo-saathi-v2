@@ -44,7 +44,8 @@ function systemPrompt(ctx: ToolContext) {
 async function runAnthropic(history: ChatTurn[], ctx: ToolContext): Promise<string> {
   const cfg = config.anthropic();
   if (!cfg) throw new ProviderError("ANTHROPIC_API_KEY not configured");
-  const client = new Anthropic({ apiKey: cfg.apiKey, timeout: config.timeoutMs(), maxRetries: 1 });
+  // An empty ANTHROPIC_BASE_URL in .env must not override the real endpoint.
+  const client = new Anthropic({ apiKey: cfg.apiKey, baseURL: process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com", timeout: config.timeoutMs(), maxRetries: 1 });
   const tools: Anthropic.Beta.BetaTool[] = TOOL_DEFS.map((t) => ({
     name: t.name,
     description: t.description,
@@ -105,7 +106,7 @@ async function runOpenAI(history: ChatTurn[], ctx: ToolContext): Promise<string>
   ];
   const tools = TOOL_DEFS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } }));
   for (let step = 0; step < MAX_STEPS; step++) {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({ model: cfg.model, messages, tools, tool_choice: "auto" }),

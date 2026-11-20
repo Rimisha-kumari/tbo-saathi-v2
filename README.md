@@ -29,7 +29,11 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
   - `thinking`: a shimmer across the character plus orbiting dots
   - `speaking`: the jaw and mouth open in sync with the speech level, with head cadence and vocal pulse bars
   - `concerned`: a red alert aura, a lean and a softened smile
-- **Talking visual.** No mouth or lip overlays are drawn on the character. Instead, a speech-energy signal from the cadence timeline in `src/lib/speech/visemes.ts` drives:
+- **Natural lip-sync.** While Saathi speaks, her real mouth moves; nothing is pasted on.
+  - A feathered copy of the character's own mouth and chin pixels is stretched down from the upper-lip line, so the lower lip and chin drop and the teeth show more. It spreads for "ee", narrows for "oo", and is driven by the syllable-cadence stream.
+  - A soft multiply-blended shade darkens the real teeth gap to add depth.
+  - At rest both layers are pixel-identical to the artwork, so she returns to her calm smile.
+- **Talking visual.** No sticker-style mouth shapes are drawn on the character. Instead, a speech-energy signal from the cadence timeline in `src/lib/speech/visemes.ts` drives:
   - a soft glow and thin harmonic rings around the character
   - a mirrored voice-wave at the base of the stage
   - a subtle head and body motion
@@ -100,6 +104,13 @@ You don't need any API keys. Without them, Saathi uses the built-in **Smart Demo
 | `SARVAM_API_KEY` (`SARVAM_TTS_SPEAKER`) | Indian-language TTS (`bulbul`) and STT (`saarika`). |
 | `BHASHINI_USER_ID` + `BHASHINI_API_KEY` (looks up the endpoint automatically), **or** `BHASHINI_INFERENCE_URL` + `BHASHINI_INFERENCE_KEY` + `BHASHINI_TTS_SERVICE_ID` | TTS through the Bhashini ULCA pipeline. |
 | `PROVIDER_TIMEOUT_MS` | How long to wait for an external provider before falling back (default 25000). |
+
+**Credits or quota exhausted?** Errors such as HTTP 400 "credit balance is too low", HTTP 402 or HTTP 429 `insufficient_quota` are handled cleanly:
+- The chat tries the next configured LLM (Claude, then OpenAI). If none works, the Smart Demo Agent answers that turn.
+- Speech tries Sarvam, then Bhashini, then OpenAI, then the browser's `speechSynthesis`/`SpeechRecognition`.
+- A failed provider is skipped for a while: 10 min for credit, quota or auth errors; 60 s for rate limits; 30 s for outages. Later turns stay fast instead of retrying the same error.
+- Trip planning, comparison, booking, disruption rescue and the demo chips keep working throughout.
+- `GET /api/chat` and `GET /api/speech` list which providers are cooling down.
 
 **Is the live LLM or the demo brain answering?** Every `/api/chat` turn logs a single line on the server:
 

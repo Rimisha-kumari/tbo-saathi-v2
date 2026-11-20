@@ -231,9 +231,15 @@ export function useVoice() {
 
   const playCloud = useCallback(async (text: string, lang: string, token: number) => {
     const r = await fetch("/api/speech", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "tts", text, lang }) });
-    if (!r.ok) return false;
-    const d = (await r.json()) as { audio?: string; mime?: string };
-    if (!d.audio || token !== speakToken.current) return false;
+    const d = (await r.json().catch(() => ({}))) as { audio?: string; mime?: string; fallback?: string; reason?: string };
+    if (!r.ok || !d.audio) {
+      // Server voices failed/out of credits → browser speechSynthesis; back off longer for quota errors.
+      const backoff = /credit|quota|unauthori[sz]ed|invalid .*key/i.test(d.reason ?? "") ? 10 * 60_000 : 60_000;
+      cloudCooldown.current = Math.max(cloudCooldown.current, Date.now() + backoff);
+      if (d.reason) console.info(`[Saathi] cloud voice unavailable (${d.reason}) – using the browser voice`);
+      return false;
+    }
+    if (token !== speakToken.current) return false;
     const audio = new Audio(`data:${d.mime};base64,${d.audio}`);
     audioRef.current = audio;
     try {
@@ -286,7 +292,7 @@ export function useVoice() {
           } catch {
             /* fall through to the browser voice */
           }
-          cloudCooldown.current = Date.now() + 60_000;
+          cloudCooldown.current = Math.max(cloudCooldown.current, Date.now() + 60_000);
           if (token !== speakToken.current) return;
         }
         const synth = "speechSynthesis" in window;
